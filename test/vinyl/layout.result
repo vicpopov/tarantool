@@ -155,11 +155,11 @@ result
           type: PAGEINFO
         BODY:
           offset: 68
-          size: 65
-          unpacked_size: 46
+          size: 73
+          unpacked_size: 54
           count: 3
           min: [1]
-          page_index_offset: 27
+          page_index_offset: 33
   - - 00000000000000000001.run
     - - HEADER:
           lsn: 6
@@ -179,7 +179,7 @@ result
       - HEADER:
           type: PAGEINDEX
         BODY:
-          page_index: "\0\0\0\0\0\0\0\t\0\0\0\x12"
+          page_index: "\0\0\0\0\0\0\0\v\0\0\0\x16"
   - - 00000000000000000002.index
     - - HEADER:
           type: RUNINFO
@@ -192,11 +192,11 @@ result
           type: PAGEINFO
         BODY:
           offset: 68
-          size: 65
-          unpacked_size: 46
+          size: 73
+          unpacked_size: 54
           count: 3
           min: [4]
-          page_index_offset: 27
+          page_index_offset: 33
   - - 00000000000000000002.run
     - - HEADER:
           lsn: 9
@@ -216,7 +216,7 @@ result
       - HEADER:
           type: PAGEINDEX
         BODY:
-          page_index: "\0\0\0\0\0\0\0\t\0\0\0\x12"
+          page_index: "\0\0\0\0\0\0\0\v\0\0\0\x16"
 ...
 test_run:cmd("clear filter")
 ---

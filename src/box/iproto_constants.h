@@ -57,6 +57,7 @@ enum iproto_key {
 	IPROTO_LSN = 0x03,
 	IPROTO_TIMESTAMP = 0x04,
 	IPROTO_SCHEMA_ID = 0x05,
+	IPROTO_TRANSACTION_ID = 0x06,
 	/* Leave a gap for other keys in the header. */
 	IPROTO_SPACE_ID = 0x10,
 	IPROTO_INDEX_ID = 0x11,
@@ -141,8 +142,11 @@ enum iproto_type {
 	IPROTO_UPSERT = 9,
 	/** CALL request - returns arbitrary MessagePack */
 	IPROTO_CALL = 10,
+	IPROTO_BEGIN = 11,
+	IPROTO_COMMIT = 12,
+	IPROTO_ROLLBACK = 13,
 	/** The maximum typecode used for box.stat() */
-	IPROTO_TYPE_STAT_MAX = IPROTO_CALL + 1,
+	IPROTO_TYPE_STAT_MAX = IPROTO_ROLLBACK + 1,
 
 	/** PING request */
 	IPROTO_PING = 64,

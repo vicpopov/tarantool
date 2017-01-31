@@ -60,6 +60,9 @@ local method_codec           = {
     update  = internal.encode_update,
     upsert  = internal.encode_upsert,
     select  = internal.encode_select,
+    begin   = internal.encode_begin,
+    commit  = internal.encode_commit,
+    rollback = internal.encode_rollback,
     -- inject raw data into connection, used by console and tests
     inject = function(buf, id, schema_id, bytes)
         local ptr = buf:reserve(#bytes)
@@ -434,9 +437,11 @@ local function create_transport(host, port, user, password, callback)
         local select2_id = new_request_id()
         local response = {}
         -- fetch everything from space _vspace, 2 = ITER_ALL
-        encode_select(send_buf, select1_id, nil, VSPACE_ID, 0, 2, 0, 0xFFFFFFFF, nil)
+        encode_select(send_buf, select1_id, nil, fiber_self().id(), VSPACE_ID,
+                      0, 2, 0, 0xFFFFFFFF, nil)
         -- fetch everything from space _vindex, 2 = ITER_ALL
-        encode_select(send_buf, select2_id, nil, VINDEX_ID, 0, 2, 0, 0xFFFFFFFF, nil)
+        encode_select(send_buf, select2_id, nil, fiber_self().id(), VINDEX_ID,
+                      0, 2, 0, 0xFFFFFFFF, nil)
         schema_id = nil -- any schema_id will do provided that
                         -- it is consistent across responses
         repeat
@@ -683,6 +688,7 @@ function remote_methods:_request(method, opts, ...)
     end
     local buffer = opts and opts.buffer
     local err, res
+    local tx_id = this_fiber.id()
     repeat
         local timeout = deadline and max(0, deadline - fiber_time())
         if self.state ~= 'active' then
@@ -690,7 +696,7 @@ function remote_methods:_request(method, opts, ...)
             timeout = deadline and max(0, deadline - fiber_time())
         end
         err, res = perform_request(timeout, buffer, method,
-                                   self._schema_id, ...)
+                                   self._schema_id, tx_id, ...)
         if not err and buffer ~= nil then
             return res -- the length of xrow.body
         elseif not err then
@@ -744,6 +750,34 @@ end
 function remote_methods:eval(code, ...)
     remote_check(self, 'eval')
     return unpack(self:_request('eval', nil, code, {...}))
+end
+
+function remote_methods:remote_tx_manage(tx_id, method)
+    remote_check(self, method)
+    local deadline = self._deadlines[fiber_self()]
+    local timeout = deadline and max(0, deadline-fiber_time())
+    local err, res = self._transport.perform_request(timeout, nil, method,
+                                                     self._schema_id, tx_id)
+    if not err or err == E_WRONG_SCHEMA_VERSION then
+        return true
+    else
+        box.error({code = err, reason = res})
+    end
+end
+
+function remote_methods:begin()
+    local tx_id = fiber_self().id()
+    return self:remote_tx_manage(tx_id, 'begin')
+end
+
+function remote_methods:commit()
+    local tx_id = fiber_self().id()
+    return self:remote_tx_manage(tx_id, 'commit')
+end
+
+function remote_methods:rollback()
+    local tx_id = fiber_self().id()
+    return self:remote_tx_manage(tx_id, 'rollback')
 end
 
 function remote_methods:wait_state(state, timeout)
@@ -872,7 +906,8 @@ function console_methods:eval(line, timeout)
     end
     if self.protocol == 'Binary' then
         local loader = 'return require("console").eval(...)'
-        err, res = pr(timeout, nil, 'eval', nil, loader, {line})
+        err, res = pr(timeout, nil, 'eval', nil, fiber_self().id(), loader,
+                      {line})
     else
         assert(self.protocol == 'Lua console')
         err, res = pr(timeout, nil, 'inject', nil, line..'$EOF$\n')

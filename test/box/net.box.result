@@ -1569,6 +1569,50 @@ test_run:cmd("setopt delimiter ''");
 ---
 - true
 ...
+--
+-- Test correct error processing of remote memtx transacxtion
+--
+space = box.schema.space.create('test_remote_space', { engine = 'memtx' })
+---
+...
+pk = space:create_index('pk')
+---
+...
+c = net.connect(box.cfg.listen)
+---
+...
+remote_space = c.space.test_remote_space
+---
+...
+c:begin()
+---
+- true
+...
+remote_space:replace{1}
+---
+- error: iproto transaction does not support triggers on fiber stop or yield
+...
+c:commit()
+---
+- true
+...
+space:select{}
+---
+- []
+...
+-- However, the single statement iproto transactions are still
+-- allowed:
+remote_space:replace{2}
+---
+- [2]
+...
+space:select{}
+---
+- - [2]
+...
+space:drop()
+---
+...
 box.schema.user.revoke('guest', 'read,write,execute', 'universe')
 ---
 ...

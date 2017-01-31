@@ -627,6 +627,23 @@ do
 end;
 test_run:cmd("setopt delimiter ''");
 
+--
+-- Test correct error processing of remote memtx transacxtion
+--
+space = box.schema.space.create('test_remote_space', { engine = 'memtx' })
+pk = space:create_index('pk')
+c = net.connect(box.cfg.listen)
+remote_space = c.space.test_remote_space
+c:begin()
+remote_space:replace{1}
+c:commit()
+space:select{}
+-- However, the single statement iproto transactions are still
+-- allowed:
+remote_space:replace{2}
+space:select{}
+space:drop()
+
 box.schema.user.revoke('guest', 'read,write,execute', 'universe')
 
 -- Tarantool < 1.7.1 compatibility (gh-1533)

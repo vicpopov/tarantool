@@ -47,12 +47,6 @@ double too_long_threshold;
 /** Pool of transaction objects. */
 static struct mempool txn_pool;
 
-static inline void
-fiber_set_txn(struct fiber *fiber, struct txn *txn)
-{
-	fiber_set_key(fiber, FIBER_KEY_TXN, (void *) txn);
-}
-
 static void
 txn_add_redo(struct txn_stmt *stmt, struct request *request)
 {
@@ -69,6 +63,7 @@ txn_add_redo(struct txn_stmt *stmt, struct request *request)
 	row->lsn = 0;
 	row->sync = 0;
 	row->tm = 0;
+	row->tx_id = 0;
 	row->bodycnt = request_encode_xc(request, row->body, &in_txn()->region);
 	stmt->row = row;
 }
@@ -107,6 +102,8 @@ txn_begin(bool is_autocommit)
 	txn->engine = NULL;
 	txn->engine_tx = NULL;
 	region_create(&txn->region, cord_slab_cache());
+	txn->fiber_on_yield.run = NULL;
+	txn->fiber_on_stop.run = NULL;
 	/* fiber_on_yield/fiber_on_stop initialized by engine on demand */
 	fiber_set_txn(fiber(), txn);
 	return txn;

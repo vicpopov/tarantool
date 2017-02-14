@@ -1520,6 +1520,7 @@ box_init(void)
 	 * as a default session user when running triggers.
 	 */
 	session_init();
+	txn_init();
 }
 
 bool

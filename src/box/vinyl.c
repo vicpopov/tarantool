@@ -1901,7 +1901,8 @@ vy_run_write_page(struct vy_run_info *run_info, struct xlog *data_xlog,
 
 	if (run_info->count == 0) {
 		/* See comment to run_info->max_key allocation below. */
-		region_key = tuple_extract_key(*curr_stmt, key_def, NULL);
+		region_key = tuple_extract_key(*curr_stmt, key_def, NULL,
+					       &fiber()->gc);
 		if (region_key == NULL)
 			goto error_page_index;
 		assert(run_info->min_key == NULL);
@@ -1955,7 +1956,8 @@ vy_run_write_page(struct vy_run_info *run_info, struct xlog *data_xlog,
 		 * than a fiber. To reach this, we must copy the
 		 * key into malloced memory.
 		 */
-		region_key = tuple_extract_key(stmt, key_def, NULL);
+		region_key = tuple_extract_key(stmt, key_def, NULL,
+					       &fiber()->gc);
 		if (region_key == NULL)
 			goto error_rollback;
 		assert(run_info->max_key == NULL);
@@ -5998,7 +6000,7 @@ vy_insert_primary(struct vy_tx *tx, struct vy_index *pk, struct tuple *stmt)
 	struct index_def *def = pk->index_def;
 	const char *key;
 	assert(def->iid == 0);
-	key = tuple_extract_key(stmt, &def->key_def, NULL);
+	key = tuple_extract_key(stmt, &def->key_def, NULL, txn_region());
 	if (key == NULL)
 		return -1;
 	/*
@@ -6036,7 +6038,7 @@ vy_insert_secondary(struct vy_tx *tx, struct vy_index *index,
 	if (index->user_index_def->opts.is_unique) {
 		uint32_t key_len;
 		const char *key = tuple_extract_key(stmt, &def->key_def,
-						    &key_len);
+						    &key_len, txn_region());
 		if (key == NULL)
 			return -1;
 		uint32_t part_count = mp_decode_array(&key);
@@ -6082,7 +6084,8 @@ vy_replace_one(struct vy_tx *tx, struct space *space,
 	 */
 	if (stmt != NULL && !rlist_empty(&space->on_replace)) {
 		const char *key;
-		key = tuple_extract_key(new_tuple, &def->key_def, NULL);
+		key = tuple_extract_key(new_tuple, &def->key_def, NULL,
+					txn_region());
 		if (key == NULL)
 			goto error_unref;
 		uint32_t part_count = mp_decode_array(&key);
@@ -6135,7 +6138,8 @@ vy_replace_impl(struct vy_tx *tx, struct space *space, struct request *request,
 				       request->tuple_end);
 	if (new_stmt == NULL)
 		return -1;
-	const char *key = tuple_extract_key(new_stmt, &def->key_def, NULL);
+	const char *key = tuple_extract_key(new_stmt, &def->key_def, NULL,
+					    txn_region());
 	if (key == NULL) /* out of memory */
 		goto error;
 	uint32_t part_count = mp_decode_array(&key);
@@ -6254,8 +6258,10 @@ vy_index_full_by_stmt(struct vy_tx *tx, struct vy_index *index,
 	uint32_t size;
 	const char *tuple = tuple_data_range(partial, &size);
 	const char *tuple_end = tuple + size;
+	struct region *region = &fiber()->gc;
+	size_t used = region_used(region);
 	const char *pkey = tuple_extract_key_raw(tuple, tuple_end,
-						 &to_pk->key_def, NULL);
+						 &to_pk->key_def, NULL, region);
 	if (pkey == NULL)
 		return -1;
 	/* Fetch the tuple from the primary index. */
@@ -6264,7 +6270,9 @@ vy_index_full_by_stmt(struct vy_tx *tx, struct vy_index *index,
 	struct space *space = index->space;
 	struct vy_index *pk = vy_index_find(space, 0);
 	assert(pk != NULL);
-	return vy_index_get(tx, pk, pkey, part_count, full);
+	int rc = vy_index_get(tx, pk, pkey, part_count, full);
+	region_truncate(region, used);
+	return rc;
 }
 
 /**
@@ -6478,9 +6486,10 @@ vy_update(struct vy_tx *tx, struct txn_stmt *stmt, struct space *space,
 	uint32_t new_size, old_size;
 	const char *old_tuple = tuple_data_range(stmt->old_tuple, &old_size);
 	const char *old_tuple_end = old_tuple + old_size;
-	new_tuple = tuple_update_execute(region_aligned_alloc_cb, &fiber()->gc,
-					 request->tuple, request->tuple_end,
-					 old_tuple, old_tuple_end, &new_size,
+	new_tuple = tuple_update_execute(region_aligned_alloc_cb,
+					 &in_txn()->region, request->tuple,
+					 request->tuple_end, old_tuple,
+					 old_tuple_end, &new_size,
 					 request->index_base, &column_mask);
 	if (new_tuple == NULL)
 		return -1;
@@ -6615,13 +6624,13 @@ vy_upsert(struct vy_tx *tx, struct txn_stmt *stmt, struct space *space,
 {
 	assert(tx != NULL && tx->state == VINYL_TX_READY);
 	/* Check update operations. */
-	if (tuple_update_check_ops(region_aligned_alloc_cb, &fiber()->gc,
+	if (tuple_update_check_ops(region_aligned_alloc_cb, &in_txn()->region,
 				   request->ops, request->ops_end,
 				   request->index_base)) {
 		return -1;
 	}
 	if (request->index_base != 0) {
-		if (request_normalize_ops(request))
+		if (request_normalize_ops(request, &in_txn()->region))
 			return -1;
 	}
 	assert(request->index_base == 0);
@@ -6655,7 +6664,8 @@ vy_upsert(struct vy_tx *tx, struct txn_stmt *stmt, struct space *space,
 	 *   to delete old tuples from secondary indexes.
 	 */
 	/* Find the old tuple using the primary key. */
-	key = tuple_extract_key_raw(tuple, tuple_end, &pk_def->key_def, NULL);
+	key = tuple_extract_key_raw(tuple, tuple_end, &pk_def->key_def, NULL,
+				    &in_txn()->region);
 	if (key == NULL)
 		return -1;
 	part_count = mp_decode_array(&key);
@@ -6678,7 +6688,7 @@ vy_upsert(struct vy_tx *tx, struct txn_stmt *stmt, struct space *space,
 
 	/* Apply upsert operations to the old tuple. */
 	new_tuple = tuple_upsert_execute(region_aligned_alloc_cb,
-					 &fiber()->gc, ops, ops_end,
+					 &in_txn()->region, ops, ops_end,
 					 old_tuple, old_tuple_end,
 					 &new_size, 0, false, &column_mask);
 	if (new_tuple == NULL)
@@ -6765,27 +6775,31 @@ static int
 vy_insert(struct vy_tx *tx, struct txn_stmt *stmt, struct space *space,
 	  struct request *request)
 {
-	assert(stmt != NULL);
 	struct vy_index *pk = vy_index_find(space, 0);
 	if (pk == NULL)
 		/* The space hasn't the primary index. */
 		return -1;
 	assert(pk->index_def->iid == 0);
 	/* First insert into the primary index. */
-	stmt->new_tuple =
+	struct tuple *new_tuple =
 		vy_stmt_new_replace(space->format, request->tuple,
 				    request->tuple_end);
-	if (stmt->new_tuple == NULL)
+	if (new_tuple == NULL)
 		return -1;
-	if (vy_insert_primary(tx, pk, stmt->new_tuple) != 0)
-		return -1;
+	if (vy_insert_primary(tx, pk, new_tuple) != 0)
+		goto error;
 
 	for (uint32_t iid = 1; iid < space->index_count; ++iid) {
 		struct vy_index *index = vy_index(space->index[iid]);
-		if (vy_insert_secondary(tx, index, stmt->new_tuple) != 0)
-			return -1;
+		if (vy_insert_secondary(tx, index, new_tuple) != 0)
+			goto error;
 	}
+	if (stmt != NULL)
+		stmt->new_tuple = new_tuple;
 	return 0;
+error:
+	tuple_unref(new_tuple);
+	return -1;
 }
 
 int

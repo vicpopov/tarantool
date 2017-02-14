@@ -52,7 +52,7 @@ engine_backup_cb(const char *path, void *arg);
 struct Handler;
 
 /** Engine instance */
-class Engine {
+struct Engine {
 public:
 	Engine(const char *engine_name, struct tuple_format_vtab *format);
 

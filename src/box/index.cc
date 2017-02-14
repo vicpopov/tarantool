@@ -166,7 +166,7 @@ box_tuple_extract_key(const box_tuple_t *tuple, uint32_t space_id,
 		struct space *space = space_by_id(space_id);
 		Index *index = index_find_xc(space, index_id);
 		return tuple_extract_key(tuple, &index->index_def->key_def,
-					 key_size);
+					 key_size, &fiber()->gc);
 	} catch (ClientError *e) {
 		return NULL;
 	}

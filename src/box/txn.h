@@ -33,6 +33,9 @@
 
 #include <stdbool.h>
 #include "salad/stailq.h"
+#include "space.h"
+#include "trigger.h"
+#include "fiber.h"
 
 #if defined(__cplusplus)
 extern "C" {
@@ -44,6 +47,7 @@ extern struct rmean *rmean_box;
 struct space;
 struct tuple;
 struct xrow_header;
+struct txn;
 
 /**
  * A single statement of a multi-statement
@@ -65,14 +69,6 @@ struct txn_stmt {
 	struct xrow_header *row;
 };
 
-
-#if defined(__cplusplus)
-} /* extern "C" */
-
-#include "space.h"
-#include "trigger.h"
-#include "fiber.h"
-
 extern double too_long_threshold;
 struct tuple;
 
@@ -91,7 +87,7 @@ struct txn {
 	/** The number of active nested statement-level transactions. */
 	int in_sub_stmt;
 	/** Engine involved in multi-statement transaction. */
-	Engine *engine;
+	struct Engine *engine;
 	/** Engine-specific transaction data */
 	void *engine_tx;
 	/**
@@ -99,8 +95,13 @@ struct txn {
 	 * for in-memory engine.
 	 */
 	struct trigger fiber_on_yield, fiber_on_stop;
-	 /** Commit and rollback triggers */
+	/** Commit and rollback triggers */
 	struct rlist on_commit, on_rollback;
+	/**
+	 * Region to allocate statements and other transaction
+	 * data.
+	 */
+	struct region region;
 };
 
 /* Pointer to the current transaction (if any) */
@@ -109,6 +110,22 @@ in_txn()
 {
 	return (struct txn *) fiber_get_key(fiber(), FIBER_KEY_TXN);
 }
+
+/**
+ * Pointer to the region of the transaction if exists, or the
+ * region of the fiber otherwise.
+ */
+static inline struct region *
+txn_region()
+{
+	struct txn *txn = in_txn();
+	if (txn != NULL)
+		return &txn->region;
+	return &fiber()->gc;
+}
+
+#if defined(__cplusplus)
+} /* extern "C" */
 
 /**
  * Start a transaction explicitly.

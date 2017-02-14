@@ -455,7 +455,8 @@ vy_stmt_encode_primary(const struct tuple *value,
 	switch (type) {
 	case IPROTO_DELETE:
 		/* extract key */
-		extracted = tuple_extract_key(value, key_def, &size);
+		extracted = tuple_extract_key(value, key_def, &size,
+					      &fiber()->gc);
 		if (extracted == NULL)
 			return -1;
 		request.key = extracted;
@@ -475,7 +476,7 @@ vy_stmt_encode_primary(const struct tuple *value,
 	default:
 		unreachable();
 	}
-	xrow->bodycnt = request_encode(&request, xrow->body);
+	xrow->bodycnt = request_encode(&request, xrow->body, &fiber()->gc);
 	if (xrow->bodycnt < 0)
 		return -1;
 	return 0;
@@ -494,7 +495,8 @@ vy_stmt_encode_secondary(const struct tuple *value,
 	struct request request;
 	request_create(&request, type);
 	uint32_t size;
-	const char *extracted = tuple_extract_key(value, key_def, &size);
+	const char *extracted = tuple_extract_key(value, key_def, &size,
+						  &fiber()->gc);
 	if (extracted == NULL)
 		return -1;
 	if (type == IPROTO_REPLACE) {
@@ -505,7 +507,7 @@ vy_stmt_encode_secondary(const struct tuple *value,
 		request.key = extracted;
 		request.key_end = extracted + size;
 	}
-	xrow->bodycnt = request_encode(&request, xrow->body);
+	xrow->bodycnt = request_encode(&request, xrow->body, &fiber()->gc);
 	if (xrow->bodycnt < 0)
 		return -1;
 	else

@@ -339,7 +339,8 @@ MemtxSpace::prepareUpsert(struct txn_stmt *stmt, struct space *space,
 	/* Extract the primary key from tuple. */
 	const char *key = tuple_extract_key_raw(request->tuple,
 						request->tuple_end,
-						&index_def->key_def, NULL);
+						&index_def->key_def, NULL,
+						&fiber()->gc);
 	if (key == NULL)
 		diag_raise();
 	/* Cut array header */
@@ -366,8 +367,8 @@ MemtxSpace::prepareUpsert(struct txn_stmt *stmt, struct space *space,
 		 * @sa https://github.com/tarantool/tarantool/issues/1156
 		 */
 		if (tuple_update_check_ops(region_aligned_alloc_xc_cb, &fiber()->gc,
-				       request->ops, request->ops_end,
-				       request->index_base)) {
+					   request->ops, request->ops_end,
+					   request->index_base)) {
 			diag_raise();
 		}
 		stmt->new_tuple = memtx_tuple_new_xc(space->format,

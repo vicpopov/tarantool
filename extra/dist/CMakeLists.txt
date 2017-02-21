@@ -8,7 +8,8 @@ else()
     # RedHat/Fedora/etc.
     set(SYSCONFIG_DEFAULT "sysconfig")
 endif()
-configure_file(tarantoolctl.in tarantoolctl @ONLY)
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/tarantoolctl/binary.lua.in
+               ${CMAKE_CURRENT_BINARY_DIR}/tarantoolctl/binary.lua @ONLY)
 
 option(ENABLE_DIST "Enable install of init scripts" OFF)
 
@@ -34,6 +35,7 @@ message (STATUS "tarantoolctl logdir: ${TARANTOOL_LOGDIR}")
 set(TARANTOOL_RUNDIR "${CMAKE_INSTALL_FULL_LOCALSTATEDIR}/run/tarantool")
 message (STATUS "tarantoolctl rundir: ${TARANTOOL_RUNDIR}")
 set(TARANTOOL_USER "tarantool")
+set(SYSCONFIG_PLUGINSDIR "tarantool/plugins/")
 set(SYSCONFIG_AVAILABLEDIR "tarantool/instances.available")
 set(SYSCONFIG_ENABLEDDIR "tarantool/instances.enabled")
 set(TARANTOOL_AVAILABLEDIR "${CMAKE_INSTALL_FULL_SYSCONFDIR}/${SYSCONFIG_AVAILABLEDIR}")
@@ -46,37 +48,47 @@ else()
 endif()
 
 configure_file(default/tarantool.in default/tarantool @ONLY)
-install (FILES ${CMAKE_CURRENT_BINARY_DIR}/default/tarantool DESTINATION
-    ${CMAKE_INSTALL_SYSCONFDIR}/${SYSCONFIG_DEFAULT}/
-    PERMISSIONS
-    OWNER_READ OWNER_WRITE
-    GROUP_READ
-    WORLD_READ)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/default/tarantool
+    DESTINATION ${CMAKE_INSTALL_SYSCONFDIR}/${SYSCONFIG_DEFAULT}/
+    PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ WORLD_READ
+)
 
-# tarantoolctl itself
-install (FILES ${CMAKE_CURRENT_BINARY_DIR}/tarantoolctl DESTINATION ${CMAKE_INSTALL_BINDIR}
-    PERMISSIONS
-    OWNER_READ OWNER_WRITE OWNER_EXECUTE
-    GROUP_READ GROUP_EXECUTE
-    WORLD_READ WORLD_EXECUTE
+# tarantoolctl
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/tarantoolctl/binary.lua
+    DESTINATION bin
+    RENAME tarantoolctl
+    PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE
+                GROUP_READ GROUP_EXECUTE
+                WORLD_READ WORLD_EXECUTE
+)
+
+install(FILES   ${CMAKE_CURRENT_SOURCE_DIR}/tarantoolctl/config.lua
+                ${CMAKE_CURRENT_SOURCE_DIR}/tarantoolctl/init.lua
+    DESTINATION ${MODULE_LUADIR}/tarantoolctl/
+    PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ WORLD_READ
+)
+
+install(FILES   ${CMAKE_CURRENT_SOURCE_DIR}/tarantoolctl/tarantoolctl/init.lua
+                ${CMAKE_CURRENT_SOURCE_DIR}/tarantoolctl/tarantoolctl/control.lua
+                ${CMAKE_CURRENT_SOURCE_DIR}/tarantoolctl/tarantoolctl/xlog.lua
+    DESTINATION ${MODULE_LUADIR}/tarantoolctl/tarantoolctl/
+    PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ WORLD_READ
 )
 
 # directories in /etc/ for tarantoolctl
 install(DIRECTORY DESTINATION
-    ${CMAKE_INSTALL_SYSCONFDIR}/${SYSCONFIG_AVAILABLEDIR}
+        ${CMAKE_INSTALL_SYSCONFDIR}/${SYSCONFIG_AVAILABLEDIR}
 )
 if (WITH_SYSVINIT)
     install(DIRECTORY DESTINATION
-        ${CMAKE_INSTALL_SYSCONFDIR}/${SYSCONFIG_ENABLEDDIR}
+            ${CMAKE_INSTALL_SYSCONFDIR}/${SYSCONFIG_ENABLEDDIR}
     )
 endif()
 
 # an example instance script for tarantoolctl
 install (FILES example.lua DESTINATION
-        ${CMAKE_INSTALL_SYSCONFDIR}/${SYSCONFIG_AVAILABLEDIR}
-    PERMISSIONS
-    OWNER_READ OWNER_WRITE OWNER_READ
-    GROUP_READ WORLD_READ
+         ${CMAKE_INSTALL_SYSCONFDIR}/${SYSCONFIG_AVAILABLEDIR}
+         PERMISSIONS OWNER_READ OWNER_WRITE OWNER_READ GROUP_READ WORLD_READ
 )
 
 # directories for data, logs and pid files

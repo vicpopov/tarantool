@@ -1,5 +1,10 @@
 /etc/default/tarantool
-/usr/bin/tarantoolctl
 /etc/tarantool/instances.available/example.lua
 /etc/logrotate.d/tarantool
 /usr/share/man/man1/tarantoolctl.1
+/usr/bin/tarantoolctl
+/usr/share/tarantool/tarantoolctl/init.lua
+/usr/share/tarantool/tarantoolctl/config.lua
+/usr/share/tarantool/tarantoolctl/tarantoolctl/init.lua
+/usr/share/tarantool/tarantoolctl/tarantoolctl/control.lua
+/usr/share/tarantool/tarantoolctl/tarantoolctl/xlog.lua

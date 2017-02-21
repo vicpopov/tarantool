@@ -1,0 +1,20 @@
+#!/usr/bin/env tarantool
+local fio      = require('fio')
+local fun      = require('fun')
+local log      = require('log')
+local pwd      = require('pwd')
+local argparse = require('internal.argparse').parse
+
+local utils        = require('tarantoolctl.utils')
+local tarantoolctl = require('tarantoolctl')
+
+utils.execute_wrapped(function()
+    local tctl = tarantoolctl.new()
+    local rv   = tctl:load_defaults():load_plugins():run()
+
+    if tctl.exiting or rv == false then
+        os.exit(rv and 0 or 1)
+    end
+end)
+
+-- vim: syntax=lua

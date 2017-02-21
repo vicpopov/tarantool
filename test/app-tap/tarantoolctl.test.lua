@@ -9,6 +9,8 @@ local errno    = require('errno')
 local fiber    = require('fiber')
 local test_run = require('test_run').new()
 
+local ctl      = os.getenv('TARANTOOLCTL')
+
 local function recursive_rmdir(path)
     path = fio.abspath(path)
     local path_content = fio.glob(fio.pathjoin(path, '*'))
@@ -118,7 +120,7 @@ local function tctl_command(dir, cmd, args, name)
     if not fio.stat(fio.pathjoin(dir, '.tarantoolctl')) then
         create_script(dir, '.tarantoolctl', tctlcfg_code)
     end
-    local command = ('tarantoolctl %s %s'):format(cmd, args)
+    local command = (ctl .. ' %s %s'):format(cmd, args)
     return run_command(dir, command)
 end
 
@@ -131,7 +133,7 @@ local function check_ok(test, dir, cmd, args, e_res, e_stdout, e_stderr)
         ares = ares and val
     end
     if e_stdout ~= nil then
-        local val = test:is(res, e_res, ("check '%s' stdout for '%s'"):format(cmd,args))
+        local val = test:ok(stdout:find(e_stdout), ("check '%s' stdout for '%s'"):format(cmd,args))
         ares = ares and val
         if not val then
             print(("Expected to find '%s' in '%s'"):format(e_stdout, stdout))
@@ -145,7 +147,9 @@ local function check_ok(test, dir, cmd, args, e_res, e_stdout, e_stderr)
         end
     end
     if not ares then
-        print(res, stdout, stderr)
+        print(res)
+        print(stdout)
+        print(stderr)
     end
 end
 
@@ -196,14 +200,14 @@ do
         test:test("basic test for bad script", function(test_i)
             test_i:plan(8)
             check_ok(test_i, dir, 'start', 'script', 1, nil,
-                     'Instance script is not found')
+                     "instance 'script.lua' isn't found")
             check_ok(test_i, dir, 'start', 'bad_script', 1, nil,
-                     'unexpected symbol near')
+                     "unexpected symbol near '<eof>'")
             check_ok(test_i, dir, 'start', 'good_script', 0)
             tctl_wait(dir, 'good_script')
             -- wait here
-            check_ok(test_i, dir, 'eval',  'good_script bad_script.lua', 3,
-                     nil, 'Error while reloading config:')
+            check_ok(test_i, dir, 'eval',  'good_script bad_script.lua', 1,
+                     nil, "unexpected symbol near '<eof>'")
             check_ok(test_i, dir, 'stop', 'good_script', 0)
         end)
     end)
@@ -233,8 +237,8 @@ do
             test_i:plan(6)
             check_ok(test_i, dir, 'start', 'good_script', 0)
             tctl_wait(dir, 'good_script')
-            check_ok(test_i, dir, 'eval',  'good_script bad_script.lua', 3, nil,
-                     'Error while reloading config')
+            check_ok(test_i, dir, 'eval',  'good_script bad_script.lua', 1, nil,
+                     'Failed eval command on instance')
             check_ok(test_i, dir, 'eval',  'good_script ok_script.lua', 0,
                      '---\n- 1\n...', nil)
             check_ok(test_i, dir, 'stop', 'good_script', 0)
@@ -270,10 +274,10 @@ do
     local status, err = pcall(function()
         test:test("check basic help", function(test_i)
             test_i:plan(4)
-            test_help(test_i, nil, "tarantoolctl", "Usage:")
-            test_help(test_i, nil, "tarantoolctl help", "Usage:")
-            test_help(test_i, nil, "tarantoolctl --help", "Usage:")
-            test_help(test_i, dir, "tarantoolctl", "Usage:")
+            test_help(test_i, nil, ctl, "Usage:")
+            test_help(test_i, dir, ctl, "Usage:")
+            test_help(test_i, nil, ctl .. " help", "Usage:")
+            test_help(test_i, nil, ctl .. " --help", "Usage:")
         end)
     end)
 
@@ -305,7 +309,7 @@ do
     create_script(dir, 'filler.lua', filler_code)
 
     local function check_ctlcat_xlog(test, dir, args, delim, lc)
-        local command_base = 'tarantoolctl cat filler/00000000000000000000.xlog'
+        local command_base = ctl .. ' cat filler/00000000000000000000.xlog'
         local desc = args and "cat + " .. args or "cat"
         args = args and " " .. args or ""
         local res, stdout, stderr = run_command(dir, command_base .. args)
@@ -314,7 +318,7 @@ do
     end
 
     local function check_ctlcat_snap(test, dir, args, delim, lc)
-        local command_base = 'tarantoolctl cat filler/00000000000000000000.snap'
+        local command_base = ctl .. ' cat filler/00000000000000000000.snap'
         local desc = args and "cat + " .. args or "cat"
         args = args and " " .. args or ""
         local res, stdout, stderr = run_command(dir, command_base .. args)
@@ -385,7 +389,7 @@ do
                       "return require('uri').parse(box.cfg.listen).service")[1]
     )
 
-    local command_base = ('tarantoolctl play localhost:%d filler/00000000000000000000.xlog'):format(port)
+    local command_base = (cat .. ' play localhost:%d filler/00000000000000000000.xlog'):format(port)
 
     local status, err = pcall(function()
         test:test("fill and test play output", function(test_i)

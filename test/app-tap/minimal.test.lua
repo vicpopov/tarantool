@@ -48,12 +48,17 @@ for _, env in ipairs({
     {'LUA_PATH', 'script-path.lua', package.path},
     {'LUA_CPATH', 'script-cpath.lua', package.cpath}
 }) do
-    for _, res in ipairs({
+    local result = {
         {' is empty', '', ''},
         {' isn\'t empty (without ";;")', 'bla-bla.lua', 'bla-bla.lua'},
         {' isn\'t empty (without ";;")', 'bla-bla.lua;', 'bla-bla.lua;'},
-        {' isn\'t empty (without ";;")', 'bla-bla.lua;;', 'bla-bla.lua;' .. env[3] .. ';'},
-    }) do
+        {' isn\'t empty (with ";;")',    os.getenv(env[1]), env[3]},
+    }
+    if env[3] == package.cpath then
+        result[4][2] = 'bla-bla.lua;;'
+        result[4][3] = 'bla-bla.lua;' .. package.cpath ..';'
+    end
+    for _, res in ipairs(result) do
         local fh = io.popen(env[1] .. "='" .. res[2] .. "' tarantool ./" .. env[2])
         tap:is(fh:read(), res[3], env[1] .. res[1])
         fh:close()

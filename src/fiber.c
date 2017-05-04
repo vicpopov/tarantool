@@ -89,9 +89,6 @@ update_last_stack_frame(struct fiber *fiber)
 
 }
 
-static void
-fiber_recycle(struct fiber *fiber);
-
 /**
  * Transfer control to callee fiber.
  */
@@ -529,7 +526,7 @@ fiber_reset(struct fiber *fiber)
 }
 
 /** Destroy an active fiber and prepare it for reuse. */
-static void
+void
 fiber_recycle(struct fiber *fiber)
 {
 	/* no exceptions are leaking */

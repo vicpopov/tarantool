@@ -510,6 +510,12 @@ fiber_c_invoke(fiber_func f, va_list ap)
 	return f(ap);
 }
 
+
+
+/** Destroy an active fiber and prepare it for reuse. */
+void
+fiber_recycle(struct fiber *fiber);
+
 #if defined(__cplusplus)
 } /* extern "C" */
 

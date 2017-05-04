@@ -511,6 +511,51 @@ lbox_fiber_wakeup(struct lua_State *L)
 	return 0;
 }
 
+static int
+lbox_fiber_join(struct lua_State *L)
+{
+	struct fiber *fiber = lbox_checkfiber(L, 1);
+	assert(fiber->flags & FIBER_IS_JOINABLE);
+
+	if (!fiber_is_dead(fiber)) {
+		rlist_add_tail_entry(&fiber->wake, fiber(), state);
+		fiber_yield();
+	}
+
+	int ret = fiber->f_ret;
+	bool fiber_was_cancelled = fiber->flags & FIBER_IS_CANCELLED;
+	struct error *e = NULL;
+	if (ret != 0 && !fiber_was_cancelled) {
+		/* we don't want to spoil diag of current fiber
+		 * so not calling luaT_error()
+		 */
+		assert(!diag_is_empty(&fiber->diag));
+		e = diag_last_error(&fiber->diag);
+		error_ref(e);
+		luaT_pusherror(L, e);
+		diag_clear(&fiber->diag);
+	}
+	fiber_recycle(fiber);
+	if (e) {
+		error_unref(e);
+		lua_error(L);
+	}	
+	return 0;
+}
+
+static int
+lbox_fiber_set_joinable(struct lua_State *L)
+{
+
+	if (lua_gettop(L) != 2) {
+		luaL_error(L, "fiber.set_joinable(id, yesno): bad arguments");
+	}
+	struct fiber *fiber = lbox_checkfiber(L, 1);
+	bool yesno = lua_toboolean(L, 2);
+	fiber_set_joinable(fiber, yesno);
+	return 0;
+}
+
 static const struct luaL_Reg lbox_fiber_meta [] = {
 	{"id", lbox_fiber_id},
 	{"name", lbox_fiber_name},
@@ -520,6 +565,8 @@ static const struct luaL_Reg lbox_fiber_meta [] = {
 	{"__serialize", lbox_fiber_serialize},
 	{"__tostring", lbox_fiber_tostring},
 	{"wakeup", lbox_fiber_wakeup},
+	{"join", lbox_fiber_join},
+	{"set_joinable", lbox_fiber_set_joinable},
 	{"__index", lbox_fiber_index},
 	{NULL, NULL}
 };
@@ -533,6 +580,8 @@ static const struct luaL_Reg fiberlib[] = {
 	{"find", lbox_fiber_find},
 	{"kill", lbox_fiber_cancel},
 	{"wakeup", lbox_fiber_wakeup},
+	{"join", lbox_fiber_join},
+	{"set_joinable", lbox_fiber_set_joinable},
 	{"cancel", lbox_fiber_cancel},
 	{"testcancel", lbox_fiber_testcancel},
 	{"create", lbox_fiber_create},

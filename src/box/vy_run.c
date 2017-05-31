@@ -112,6 +112,33 @@ vy_page_info_create(struct vy_page_info *page_info, uint64_t offset,
 	return page_info->min_key == NULL ? -1 : 0;
 }
 
+int
+vy_run_dump_stmt(struct tuple *value, struct xlog *data_xlog,
+		 struct vy_page_info *info, const struct key_def *key_def,
+		 bool is_primary)
+{
+	struct region *region = &fiber()->gc;
+	size_t used = region_used(region);
+
+	struct xrow_header xrow;
+	int rc = (is_primary ?
+		  vy_stmt_encode_primary(value, key_def, 0, &xrow) :
+		  vy_stmt_encode_secondary(value, key_def, &xrow));
+	if (rc != 0)
+		return -1;
+
+	ssize_t row_size;
+	if ((row_size = xlog_write_row(data_xlog, &xrow)) < 0)
+		return -1;
+
+	region_truncate(region, used);
+
+	info->unpacked_size += row_size;
+	++info->count;
+	return 0;
+}
+
+
 /**
  * Destroy page info struct
  */

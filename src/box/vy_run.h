@@ -47,6 +47,8 @@
 extern "C" {
 #endif /* defined(__cplusplus) */
 
+struct xlog;
+
 static const uint64_t vy_page_info_key_map = (1 << VY_PAGE_INFO_OFFSET) |
 					     (1 << VY_PAGE_INFO_SIZE) |
 					     (1 << VY_PAGE_INFO_UNPACKED_SIZE) |
@@ -304,6 +306,24 @@ vy_run_env_destroy(struct vy_run_env *env);
 int
 vy_page_info_create(struct vy_page_info *page_info, uint64_t offset,
 		    const struct tuple *min_key, const struct key_def *key_def);
+
+/**
+ * Dump the statement to the page buffer.
+ * @param value Statement to dump.
+ * @param data_xlog Buffer to write to.
+ * @param info Destination page info.
+ * @param key_def Key definition of the statement. Used to extract
+ *        DELETE key from the surrogate statement and to extract
+ *        key from any secondary index statement.
+ * @param is_primary True, if the destination index is primary.
+ *
+ * @retval -1 Memory error.
+ * @retval  0 Success.
+ */
+int
+vy_run_dump_stmt(struct tuple *value, struct xlog *data_xlog,
+		 struct vy_page_info *info, const struct key_def *key_def,
+		 bool is_primary);
 
 void
 vy_page_info_destroy(struct vy_page_info *page_info);

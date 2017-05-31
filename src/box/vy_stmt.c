@@ -441,14 +441,14 @@ vy_stmt_new_surrogate_delete(struct tuple_format *format,
 }
 
 int
-vy_stmt_encode_primary(const struct tuple *value,
+vy_stmt_encode_primary(const struct tuple *value, int64_t lsn,
 		       const struct key_def *key_def, uint32_t space_id,
 		       struct xrow_header *xrow)
 {
 	memset(xrow, 0, sizeof(*xrow));
 	enum iproto_type type = vy_stmt_type(value);
 	xrow->type = type;
-	xrow->lsn = vy_stmt_lsn(value);
+	xrow->lsn = lsn;
 
 	struct request request;
 	request_create(&request, type);
@@ -485,14 +485,14 @@ vy_stmt_encode_primary(const struct tuple *value,
 }
 
 int
-vy_stmt_encode_secondary(const struct tuple *value,
+vy_stmt_encode_secondary(const struct tuple *value, int64_t lsn,
 			 const struct key_def *key_def,
 			 struct xrow_header *xrow)
 {
 	memset(xrow, 0, sizeof(*xrow));
 	enum iproto_type type = vy_stmt_type(value);
 	xrow->type = type;
-	xrow->lsn = vy_stmt_lsn(value);
+	xrow->lsn = lsn;
 
 	struct request request;
 	request_create(&request, type);

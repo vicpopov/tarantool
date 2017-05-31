@@ -1811,6 +1811,9 @@ vy_write_iterator_add_mem(struct vy_write_iterator *wi, struct vy_mem *mem);
 static NODISCARD int
 vy_write_iterator_next(struct vy_write_iterator *wi, struct tuple **ret);
 
+static int64_t
+vy_write_iterator_oldest_vlsn(struct vy_write_iterator *wi);
+
 /**
  * Delete the iterator and free resources.
  * Can be called only after cleanup().
@@ -1882,6 +1885,7 @@ vy_run_write_page(struct vy_run_info *run_info, struct xlog *data_xlog,
 	const char *region_key;
 	bool end_of_run = false;
 	struct tuple *stmt = NULL;
+	int64_t oldest_vlsn = vy_write_iterator_oldest_vlsn(wi);
 
 	/* row offsets accumulator */
 	struct ibuf page_index_buf;
@@ -1932,7 +1936,7 @@ vy_run_write_page(struct vy_run_info *run_info, struct xlog *data_xlog,
 		stmt = *curr_stmt;
 		tuple_ref(stmt);
 		if (vy_run_dump_stmt(stmt, data_xlog, page,
-				     key_def, is_primary) != 0)
+				     key_def, is_primary, oldest_vlsn) != 0)
 			goto error_rollback;
 
 		bloom_spectrum_add(bs, tuple_hash(stmt, user_key_def));
@@ -8069,6 +8073,12 @@ struct vy_write_iterator {
 	struct vy_iterator_stat run_iterator_stat;
 };
 
+static int64_t
+vy_write_iterator_oldest_vlsn(struct vy_write_iterator *wi)
+{
+	return wi->oldest_vlsn;
+}
+
 /*
  * Open an empty write iterator. To add sources to the iterator
  * use vy_write_iterator_add_* functions
@@ -8697,8 +8707,8 @@ vy_send_range_f(struct cbus_call_msg *cmsg)
 	while ((rc = vy_write_iterator_next(ctx->wi, &stmt)) == 0 &&
 	       stmt != NULL) {
 		struct xrow_header xrow;
-		rc = vy_stmt_encode_primary(stmt, ctx->key_def,
-					    ctx->space_id, &xrow);
+		rc = vy_stmt_encode_primary(stmt, vy_stmt_lsn(stmt),
+					    ctx->key_def, ctx->space_id, &xrow);
 		if (rc != 0)
 			break;
 		/* See comment to vy_join_ctx::lsn. */

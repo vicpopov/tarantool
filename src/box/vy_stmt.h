@@ -521,6 +521,10 @@ vy_key_from_msgpack(struct tuple_format *format, const char *key)
  * Encode vy_stmt for a primary key as xrow_header
  *
  * @param value statement to encode
+ * @param lsn LSN with which need to encode the statement. Can
+ *        differ from the statement own lsn, if the lsn of the
+ *        statement is less than the oldest vlsn. In such a case
+ *        we can pass LSN = 0 and do not store it on the disk.
  * @param key_def key definition
  * @param space_id is written to the request header unless it is 0.
  * Pass 0 to save some space in xrow.
@@ -530,7 +534,7 @@ vy_key_from_msgpack(struct tuple_format *format, const char *key)
  * @retval -1 if error
  */
 int
-vy_stmt_encode_primary(const struct tuple *value,
+vy_stmt_encode_primary(const struct tuple *value, int64_t lsn,
 		       const struct key_def *key_def, uint32_t space_id,
 		       struct xrow_header *xrow);
 
@@ -538,6 +542,7 @@ vy_stmt_encode_primary(const struct tuple *value,
  * Encode vy_stmt for a secondary key as xrow_header
  *
  * @param value statement to encode
+ * @param lsn LSN with which need to encode the statement.
  * @param key_def key definition
  * @param xrow[out] xrow to fill
  *
@@ -545,7 +550,7 @@ vy_stmt_encode_primary(const struct tuple *value,
  * @retval -1 if error
  */
 int
-vy_stmt_encode_secondary(const struct tuple *value,
+vy_stmt_encode_secondary(const struct tuple *value, int64_t lsn,
 			 const struct key_def *key_def,
 			 struct xrow_header *xrow);
 

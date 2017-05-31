@@ -316,6 +316,9 @@ vy_page_info_create(struct vy_page_info *page_info, uint64_t offset,
  *        DELETE key from the surrogate statement and to extract
  *        key from any secondary index statement.
  * @param is_primary True, if the destination index is primary.
+ * @param oldest_vlsn Oldest LSN used by any read view. Used to
+ *        skip LSN of statements, which own LSN is less than the
+ *        @oldest_vlsn.
  *
  * @retval -1 Memory error.
  * @retval  0 Success.
@@ -323,7 +326,7 @@ vy_page_info_create(struct vy_page_info *page_info, uint64_t offset,
 int
 vy_run_dump_stmt(struct tuple *value, struct xlog *data_xlog,
 		 struct vy_page_info *info, const struct key_def *key_def,
-		 bool is_primary);
+		 bool is_primary, int64_t oldest_vlsn);
 
 void
 vy_page_info_destroy(struct vy_page_info *page_info);

@@ -184,31 +184,28 @@ result
           type: PAGEINFO
         BODY:
           offset: <offset>
-          size: 65
-          unpacked_size: 46
+          size: 59
+          unpacked_size: 40
           count: 3
           min: [1]
           page_index_offset: <offset>
   - - 00000000000000000002.run
     - - HEADER:
-          lsn: 6
           type: REPLACE
         BODY:
           tuple: [1]
       - HEADER:
-          lsn: 7
           type: REPLACE
         BODY:
           tuple: [2]
       - HEADER:
-          lsn: 8
           type: REPLACE
         BODY:
           tuple: [3]
       - HEADER:
           type: PAGEINDEX
         BODY:
-          page_index: "\0\0\0\0\0\0\0\t\0\0\0\x12"
+          page_index: "\0\0\0\0\0\0\0\a\0\0\0\x0E"
   - - 00000000000000000004.index
     - - HEADER:
           type: RUNINFO
@@ -223,31 +220,28 @@ result
           type: PAGEINFO
         BODY:
           offset: <offset>
-          size: 65
-          unpacked_size: 46
+          size: 59
+          unpacked_size: 40
           count: 3
           min: [4]
           page_index_offset: <offset>
   - - 00000000000000000004.run
     - - HEADER:
-          lsn: 9
           type: REPLACE
         BODY:
           tuple: [4]
       - HEADER:
-          lsn: 10
           type: REPLACE
         BODY:
           tuple: [5]
       - HEADER:
-          lsn: 11
           type: REPLACE
         BODY:
           tuple: [6]
       - HEADER:
           type: PAGEINDEX
         BODY:
-          page_index: "\0\0\0\0\0\0\0\t\0\0\0\x12"
+          page_index: "\0\0\0\0\0\0\0\a\0\0\0\x0E"
 ...
 test_run:cmd("clear filter")
 ---

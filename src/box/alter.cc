@@ -876,56 +876,6 @@ alter_space_do(struct txn *txn, struct alter_space *alter,
 
 /* {{{ AlterSpaceOp descendants - alter operations, such as Add/Drop index */
 
-/** Change non-essential properties of a space. */
-class ModifySpace: public AlterSpaceOp
-{
-public:
-	/* New space definition. */
-	struct space_def def;
-	virtual void prepare(struct alter_space *alter);
-	virtual void alter_def(struct alter_space *alter);
-};
-
-/** Check that space properties are OK to change. */
-void
-ModifySpace::prepare(struct alter_space *alter)
-{
-	if (def.id != space_id(alter->old_space))
-		tnt_raise(ClientError, ER_ALTER_SPACE,
-			  space_name(alter->old_space),
-			  "space id is immutable");
-
-	if (strcmp(def.engine_name, alter->old_space->def.engine_name) != 0)
-		tnt_raise(ClientError, ER_ALTER_SPACE,
-			  space_name(alter->old_space),
-			  "can not change space engine");
-
-	if (def.exact_field_count != 0 &&
-	    def.exact_field_count != alter->old_space->def.exact_field_count &&
-	    space_index(alter->old_space, 0) != NULL &&
-	    space_size(alter->old_space) > 0) {
-
-		tnt_raise(ClientError, ER_ALTER_SPACE,
-			  space_name(alter->old_space),
-			  "can not change field count on a non-empty space");
-	}
-
-	if (def.opts.temporary != alter->old_space->def.opts.temporary &&
-	    space_index(alter->old_space, 0) != NULL &&
-	    space_size(alter->old_space) > 0) {
-		tnt_raise(ClientError, ER_ALTER_SPACE,
-			  space_name(alter->old_space),
-			  "can not switch temporary flag on a non-empty space");
-	}
-}
-
-/** Amend the definition of the new space. */
-void
-ModifySpace::alter_def(struct alter_space *alter)
-{
-	alter->space_def = def;
-}
-
 /** DropIndex - remove an index from space. */
 
 class AddIndex;
@@ -1211,6 +1161,10 @@ AddIndex::~AddIndex()
 
 /* }}} */
 
+/*
+ * The trigger fires on drop space commit.
+ * Just delete a space.
+ */
 static void
 on_drop_space_commit(struct trigger *trigger, void *event)
 {
@@ -1219,6 +1173,10 @@ on_drop_space_commit(struct trigger *trigger, void *event)
 	space_delete(space);
 }
 
+/*
+ * The trigger fires on drop space rollback.
+ * Return deleted space to a space cache.
+ */
 static void
 on_drop_space_rollback(struct trigger *trigger, void *event)
 {
@@ -1227,9 +1185,44 @@ on_drop_space_rollback(struct trigger *trigger, void *event)
 	space_cache_replace(space);
 }
 
+/*
+ * The trigger fires on alter space commit.
+ * Just delete a old_space.
+ */
+static void
+on_alter_space_commit(struct trigger *trigger, void *event)
+{
+	(void) event;
+	struct space *old_space = (struct space *)trigger->data;
+	space_delete(old_space);
+}
+
+/*
+ * The trigger fires on alter space rollback.
+ * Move all indexes from a new space to a old_space and
+ * restore a old_space in a space cache.
+ */
+static void
+on_alter_space_rollback(struct trigger *trigger, void *event)
+{
+	(void) event;
+	struct space *old_space = (struct space *)trigger->data;
+	struct space *new_space = space_cache_replace(old_space);
+	assert(old_space->index_count == new_space->index_count);
+	for (uint32_t i = 0; i < old_space->index_count; ++i) {
+		space_swap_index(old_space, new_space,
+				 index_id(old_space->index[i]),
+				 index_id(new_space->index[i]));
+	}
+	/* Rebuild index maps. */
+	space_fill_index_map(old_space);
+	space_fill_index_map(new_space);
+	space_delete(new_space);
+}
+
 /**
- * A trigger invoked on commit/rollback of DROP/ADD space.
- * The trigger removed the space from the space cache.
+ * The trigger fires on create space rollback.
+ * Remove a new space from space cache and delete it.
  */
 static void
 on_create_space_rollback(struct trigger *trigger, void *event)
@@ -1240,6 +1233,45 @@ on_create_space_rollback(struct trigger *trigger, void *event)
 	(void) cached;
 	assert(cached == space);
 	space_delete(space);
+}
+
+static int
+check_space_alter_def(struct space *space, struct space_def *def)
+{
+	if (def->id != space_id(space)) {
+		tnt_error(ClientError, ER_ALTER_SPACE,
+			  space_name(space),
+			  "space id is immutable");
+		return -1;
+	}
+
+	if (strcmp(def->engine_name, space->def.engine_name) != 0) {
+		tnt_error(ClientError, ER_ALTER_SPACE,
+			  space_name(space),
+			  "can not change space engine");
+		return -1;
+	}
+
+	if (def->exact_field_count != 0 &&
+	    def->exact_field_count != space->def.exact_field_count &&
+	    space_index(space, 0) != NULL &&
+	    space_size(space) > 0) {
+
+		tnt_error(ClientError, ER_ALTER_SPACE,
+			  space_name(space),
+			  "can not change field count on a non-empty space");
+		return -1;
+	}
+
+	if (def->opts.temporary != space->def.opts.temporary &&
+	    space_index(space, 0) != NULL &&
+	    space_size(space) > 0) {
+		tnt_error(ClientError, ER_ALTER_SPACE,
+			  space_name(space),
+			  "can not switch temporary flag on a non-empty space");
+		return -1;
+	}
+	return 0;
 }
 
 /**
@@ -1363,20 +1395,54 @@ on_replace_dd_space(struct trigger * /* trigger */, void *event)
 		txn_on_rollback(txn, on_rollback);
 	} else { /* UPDATE, REPLACE */
 		assert(old_space != NULL && new_tuple != NULL);
+		struct space_def def;
+		struct rlist key_list;
+		/* Create new space from def and key list. */
+		space_def_create_from_tuple(&def, new_tuple, ER_ALTER_SPACE);
+		if (check_space_alter_def(old_space, &def) != 0)
+			diag_raise();
+		space_dump_def(old_space, &key_list);
+		struct space *new_space = space_new(&def, &key_list);
+		/* Move all indexes from old_space to a new one */
+		for (uint32_t i = 0; i < old_space->index_count; ++i) {
+			space_swap_index(old_space, new_space,
+					 index_id(old_space->index[i]),
+					 index_id(new_space->index[i]));
+		}
+		/* Rebuild index maps. */
+		space_fill_index_map(old_space);
+		space_fill_index_map(new_space);
+		/* Swap on replace triggers. */
+		rlist_swap(&new_space->on_replace, &old_space->on_replace);
+		/* Init space bsize. */
+		if (new_space->index_count != 0)
+			new_space->bsize = old_space->bsize;
+		/* Copy access rights. */
+		memcpy(new_space->access, old_space->access,
+		       sizeof(old_space->access));
+
+		//TODO: i mean this can be simplificied in future
 		/*
-		 * Allow change of space properties, but do it
-		 * in WAL-error-safe mode.
+		 * Copy the replace function, the new space is at the
+		 * same recovery phase as the old one. This hack is
+		 * especially necessary for system spaces, which may
+		 * be altered in some row in the snapshot/xlog, but
+		 * needs to continue staying "fully built".
 		 */
-		struct alter_space *alter = alter_space_new();
-		auto scoped_guard =
-			make_scoped_guard([=] {alter_space_delete(alter);});
-		ModifySpace *modify =
-			AlterSpaceOp::create<ModifySpace>();
-		alter_space_add_op(alter, modify);
-		space_def_create_from_tuple(&modify->def, new_tuple,
-					    ER_ALTER_SPACE);
-		alter_space_do(txn, alter, old_space);
-		scoped_guard.is_active = false;
+		new_space->handler->prepareAlterSpace(old_space, new_space);
+		old_space->handler->commitAlterSpace(old_space, new_space);
+
+		/* Update space cache. */
+		space_cache_replace(new_space);
+		/* Setup triggers. */
+		struct trigger *on_commit =
+			txn_alter_trigger_new(on_alter_space_commit,
+					      old_space);
+		txn_on_commit(txn, on_commit);
+		struct trigger *on_rollback =
+			txn_alter_trigger_new(on_alter_space_rollback,
+					      old_space);
+		txn_on_rollback(txn, on_rollback);
 	}
 }
 

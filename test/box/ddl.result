@@ -1,0 +1,192 @@
+fiber = require 'fiber'
+---
+...
+env = require('test_run')
+---
+...
+test_run = env.new()
+---
+...
+space = box.schema.space.create('test')
+---
+...
+ch = fiber.channel(1)
+---
+...
+test_run:cmd("setopt delimiter ';'")
+---
+- true
+...
+function test()
+    fiber.create(function () space:drop(space) ch:put(true) end)
+    local status, res = pcall(space.create_index, space, 'pk')
+    ch:get()
+    return status, res
+end
+
+test_run:cmd("setopt delimiter ''");
+---
+...
+test()
+---
+- false
+- Space 'test' does not exist
+...
+test_run:cmd('restart server default')
+fiber = require 'fiber'
+---
+...
+env = require('test_run')
+---
+...
+test_run = env.new()
+---
+...
+space = box.schema.space.create('test')
+---
+...
+ind = space:create_index('pk')
+---
+...
+space:replace({1, 2, 3})
+---
+- [1, 2, 3]
+...
+space:replace({2, 3, 4})
+---
+- [2, 3, 4]
+...
+ch = fiber.channel(1)
+---
+...
+test_run:cmd("setopt delimiter ';'")
+---
+- true
+...
+function test()
+    box.space._space:update({space.id}, {{'=', 3, 'test1'}})
+    ch:put(true)
+end;
+---
+...
+function state()
+    fiber.create(test)
+    space:replace({1, 5, 6})
+    return {ind:select(),
+        space:select(),
+        space.name}
+end;
+---
+...
+test_run:cmd("setopt delimiter ''");
+---
+- true
+...
+state()
+---
+- - - [1, 5, 6]
+    - [2, 3, 4]
+  - - [1, 5, 6]
+    - [2, 3, 4]
+  - test1
+...
+ch:get()
+---
+- true
+...
+ind:select()
+---
+- - [1, 5, 6]
+  - [2, 3, 4]
+...
+space:select()
+---
+- - [1, 5, 6]
+  - [2, 3, 4]
+...
+space.name
+---
+- test1
+...
+test_run:cmd('restart server default')
+fiber = require'fiber'
+---
+...
+env = require('test_run')
+---
+...
+test_run = env.new()
+---
+...
+errinj = box.error.injection
+---
+...
+ch = fiber.channel(1)
+---
+...
+space = box.space.test1
+---
+...
+ind = space.index.pk
+---
+...
+errinj.set("ERRINJ_WAL_WRITE", true)
+---
+- ok
+...
+test_run:cmd("setopt delimiter ';'")
+---
+- true
+...
+function test()
+    pcall(box.space._space.update, box.space._space, {space.id}, {{'=', 3, 'test'}})
+    ch:put(true)
+end;
+---
+...
+function state()
+    fiber.create(test)
+    return {space:select(),
+        ind:select(),
+	space.name}
+end;
+---
+...
+test_run:cmd("setopt delimiter ''");
+---
+- true
+...
+state()
+---
+- - - [1, 5, 6]
+    - [2, 3, 4]
+  - - [1, 5, 6]
+    - [2, 3, 4]
+  - test
+...
+ch:get()
+---
+- true
+...
+-- space rolled back
+space:select()
+---
+- - [1, 5, 6]
+  - [2, 3, 4]
+...
+ind:select()
+---
+- - [1, 5, 6]
+  - [2, 3, 4]
+...
+space.name
+---
+- test1
+...
+errinj.set("ERRINJ_WAL_WRITE", false)
+---
+- ok
+...
+space:drop()
+---
+...

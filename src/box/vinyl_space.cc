@@ -186,7 +186,7 @@ void
 VinylSpace::addPrimaryKey(struct space *space)
 {
 	VinylIndex *pk = (VinylIndex *) index_find_xc(space, 0);
-	pk->open(space);
+	pk->open();
 }
 
 void
@@ -197,7 +197,7 @@ VinylSpace::buildSecondaryKey(struct space *old_space,
 	(void)old_space;
 	(void)new_space;
 	VinylIndex *new_index = (VinylIndex *) new_index_arg;
-	new_index->open(new_space);
+	new_index->open();
 	/*
 	 * Unlike Memtx, Vinyl does not need building of a secondary index.
 	 * This is true because of two things:

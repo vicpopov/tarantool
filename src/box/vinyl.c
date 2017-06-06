@@ -4699,9 +4699,9 @@ vy_prepare_alter_space(struct space *old_space, struct space *new_space)
 	 * The space with no indexes can contain no rows.
 	 * Allow alter.
 	 */
-	if (old_space->index_count == 0)
+	if (new_space->index_count == 0 || old_space->index_count == 0)
 		return 0;
-	struct vy_index *pk = vy_index(old_space->index[0]);
+	struct vy_index *pk = vy_index(new_space->index[0]);
 	/*
 	 * During WAL recovery, the space may be not empty. But we
 	 * open existing indexes, not creating new ones. Allow

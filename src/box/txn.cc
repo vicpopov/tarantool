@@ -85,6 +85,7 @@ txn_stmt_new(struct txn *txn)
 	stmt->bsize_change = 0;
 	stmt->engine_savepoint = NULL;
 	stmt->row = NULL;
+	rlist_create(&stmt->on_rollback);
 
 	stailq_add_tail_entry(&txn->stmts, stmt, next);
 	++txn->in_sub_stmt;

@@ -60,6 +60,7 @@ VinylSpace::applyInitialJoinRow(struct space *space, struct request *request)
 
 	struct txn_stmt stmt;
 	memset(&stmt, 0, sizeof(stmt));
+	rlist_create(&stmt.on_rollback);
 
 	int rc;
 	switch (request->type) {

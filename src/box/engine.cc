@@ -71,8 +71,10 @@ void Engine::commit(struct txn *, int64_t)
 void Engine::rollback(struct txn *)
 {}
 
-void Engine::rollbackStatement(struct txn *, struct txn_stmt *)
-{}
+void Engine::rollbackStatement(struct txn *, struct txn_stmt *stmt)
+{
+	trigger_run(&stmt->on_rollback, stmt);
+}
 
 void Engine::bootstrap()
 {}

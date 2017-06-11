@@ -33,6 +33,7 @@
 
 #include <stdbool.h>
 #include "salad/stailq.h"
+#include "small/rlist.h"
 
 #if defined(__cplusplus)
 extern "C" {
@@ -59,6 +60,7 @@ struct txn_stmt {
 	struct tuple *old_tuple;
 	struct tuple *new_tuple;
 	ptrdiff_t bsize_change; /* saved result of space_bsize_update(..) call */
+	struct rlist on_rollback;
 	/** Engine savepoint for the start of this statement. */
 	void *engine_savepoint;
 	/** Redo info: the binary log row */
@@ -147,7 +149,8 @@ static inline void
 txn_on_commit(struct txn *txn, struct trigger *trigger)
 {
 	txn_init_triggers(txn);
-	trigger_add(&txn->on_commit, trigger);
+	rlist_add_tail(&txn->on_commit, &trigger->link);
+//	trigger_add(&txn->on_commit, trigger);
 }
 
 static inline void

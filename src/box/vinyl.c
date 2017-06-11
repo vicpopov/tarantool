@@ -4701,16 +4701,17 @@ vy_prepare_alter_space(struct space *old_space, struct space *new_space)
 	 */
 	if (new_space->index_count == 0 || old_space->index_count == 0)
 		return 0;
-	struct vy_index *pk = vy_index(new_space->index[0]);
+	struct vy_index *old_pk = vy_index(old_space->index[0]);
+	struct vy_index *new_pk = vy_index(new_space->index[0]);
 	/*
 	 * During WAL recovery, the space may be not empty. But we
 	 * open existing indexes, not creating new ones. Allow
 	 * alter.
 	 */
-	if (pk->env->status != VINYL_ONLINE)
+	if (old_pk->env->status != VINYL_ONLINE)
 		return 0;
 	/* The space is empty. Allow alter. */
-	if (pk->stmt_count == 0)
+	if (old_pk->stmt_count == 0 && new_pk->stmt_count == 0)
 		return 0;
 	if (old_space->index_count < new_space->index_count) {
 		diag_set(ClientError, ER_UNSUPPORTED, "Vinyl",

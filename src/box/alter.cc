@@ -747,6 +747,38 @@ on_alter_space_index_rollback(struct trigger *trigger, void *event)
 	space_delete(new_space);
 }
 
+void
+on_alter_space_index_def_commit(struct trigger *trigger, void *event)
+{
+	(void) event;
+	struct alter_space_data *data = (struct alter_space_data *)trigger->data;
+	Index *old_index = space_index(data->old_space, data->index_id);
+	Index *new_index = space_index(data->new_space, data->index_id);
+	if (old_index != NULL && new_index == NULL)
+		old_index->commitDrop();
+
+	if (old_index == NULL && new_index != NULL)
+		new_index->commitCreate();
+
+	data->old_space->handler->commitAlterSpace(data->old_space,
+						   data->new_space);
+
+	space_delete(data->old_space);
+}
+
+void
+on_alter_space_index_def_rollback(struct trigger *trigger, void *event)
+{
+	(void) trigger;
+	(void) event;
+	struct alter_space_data *data = (struct alter_space_data *)trigger->data;
+	struct space *new_space = space_cache_replace(data->old_space);
+	assert(new_space == data->new_space);
+	swap_space(data->new_space, data->old_space);
+	space_delete(new_space);
+}
+
+
 static int
 check_space_alter_def(struct space *space, struct space_def *def)
 {
@@ -937,7 +969,8 @@ on_replace_dd_space(struct trigger * /* trigger */, void *event)
 		struct trigger *on_rollback =
 			txn_alter_trigger_new(on_alter_space_rollback,
 					      old_space);
-		txn_on_rollback(txn, on_rollback);
+		rlist_add(&stmt->on_rollback, &on_rollback->link);
+//		txn_on_rollback(txn, on_rollback);
 
 		/* Update space cache. */
 		space_cache_replace(new_space);
@@ -987,7 +1020,7 @@ on_replace_dd_index(struct trigger * /* trigger */, void *event)
 	auto lock_guard = make_scoped_guard([&]{ latch_unlock(&schema_lock); });
 
 	struct txn *txn = (struct txn *) event;
-	txn_check_autocommit(txn, "Space _index");
+//	txn_check_autocommit(txn, "Space _index");
 	struct txn_stmt *stmt = txn_current_stmt(txn);
 	struct tuple *old_tuple = stmt->old_tuple;
 	struct tuple *new_tuple = stmt->new_tuple;
@@ -1015,9 +1048,17 @@ on_replace_dd_index(struct trigger * /* trigger */, void *event)
 			       new_index_def);
 		new_index_def = NULL;
 		new_space->handler->prepareAlterSpace(old_space, new_space);
-		old_space->handler->commitAlterSpace(old_space, new_space);
+		/* Setup triggers. */
+		struct trigger *on_commit =
+			txn_alter_space_trigger_new(on_alter_space_index_def_commit,
+						    old_space, new_space, iid);
+		txn_on_commit(txn, on_commit);
+		struct trigger *on_rollback =
+			txn_alter_space_trigger_new(on_alter_space_index_def_rollback,
+						    old_space, new_space, iid);
+		rlist_add(&stmt->on_rollback, &on_rollback->link);
+//		txn_on_rollback(txn, on_rollback);
 		space_cache_replace(new_space);
-//TODO: trigger
 		return;
 	}
 
@@ -1077,6 +1118,7 @@ on_replace_dd_index(struct trigger * /* trigger */, void *event)
 	if (new_index == NULL && iid == 0)
 		new_space->handler->dropPrimaryKey(new_space);
 
+
 	/* Setup triggers. */
 	struct trigger *on_commit =
 		txn_alter_space_trigger_new(on_alter_space_index_commit,
@@ -1085,7 +1127,8 @@ on_replace_dd_index(struct trigger * /* trigger */, void *event)
 	struct trigger *on_rollback =
 		txn_alter_space_trigger_new(on_alter_space_index_rollback,
 					    old_space, new_space, iid);
-	txn_on_rollback(txn, on_rollback);
+	rlist_add(&stmt->on_rollback, &on_rollback->link);
+//	txn_on_rollback(txn, on_rollback);
 
 	space_cache_replace(new_space);
 	error_guard.is_active = false;

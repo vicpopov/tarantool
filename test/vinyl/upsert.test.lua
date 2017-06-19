@@ -312,3 +312,42 @@ upsert_stat_diff(new_stat, old_stat)
 new_stat.disk.iterator.lookup - old_stat.disk.iterator.lookup
 
 s:drop()
+
+-- gh-1622 upsert succeeds despite of field_count violation.
+s = box.schema.space.create('test', { engine = 'vinyl', field_count = 2 })
+pk = s:create_index('pk')
+s:replace{1, 1}
+-- Ok, because error appears in commit and can not be rolled back.
+s:upsert({1, 1}, {{'=', 3, 5}})
+-- During select the incorrect UPSERT is ignored.
+s:select{}
+
+-- Try incorrect field_count in a transaction.
+box.begin()
+s:replace{2, 2}
+s:upsert({2, 2}, {{'=', 3, 2}})
+s:select{}
+box.commit()
+s:select{}
+
+-- Try read incorrect UPSERT from run. It is ignored.
+box.snapshot()
+s:select{}
+s:upsert({2, 2}, {{'=', 3, 20}})
+box.snapshot()
+s:select{}
+
+-- Try to REPLACE after incorrect UPSERT.
+box.snapshot()
+s:upsert({2, 2}, {{'=', 3, 30}})
+s:replace{2, 3}
+s:select{}
+
+-- Try to UPSERT after incorrect UPSERT. In such a case all
+-- newer UPSERTs also are ignored.
+box.snapshot()
+s:upsert({2, 2}, {{'=', 3, 40}})
+s:upsert({2, 2}, {{'=', 2, 50}})
+s:select{}
+
+s:drop()

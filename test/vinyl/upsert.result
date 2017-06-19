@@ -765,3 +765,107 @@ new_stat.disk.iterator.lookup - old_stat.disk.iterator.lookup
 s:drop()
 ---
 ...
+-- gh-1622 upsert succeeds despite of field_count violation.
+s = box.schema.space.create('test', { engine = 'vinyl', field_count = 2 })
+---
+...
+pk = s:create_index('pk')
+---
+...
+s:replace{1, 1}
+---
+- [1, 1]
+...
+-- Ok, because error appears in commit and can not be rolled back.
+s:upsert({1, 1}, {{'=', 3, 5}})
+---
+...
+-- During select the incorrect UPSERT is ignored.
+s:select{}
+---
+- - [1, 1]
+...
+-- Try incorrect field_count in a transaction.
+box.begin()
+---
+...
+s:replace{2, 2}
+---
+- [2, 2]
+...
+s:upsert({2, 2}, {{'=', 3, 2}})
+---
+- error: Tuple field count 3 does not match space field count 2
+...
+s:select{}
+---
+- - [1, 1]
+  - [2, 2]
+...
+box.commit()
+---
+...
+s:select{}
+---
+- - [1, 1]
+  - [2, 2]
+...
+-- Try read incorrect UPSERT from run. It is ignored.
+box.snapshot()
+---
+- ok
+...
+s:select{}
+---
+- - [1, 1]
+  - [2, 2]
+...
+s:upsert({2, 2}, {{'=', 3, 20}})
+---
+...
+box.snapshot()
+---
+- ok
+...
+s:select{}
+---
+- - [1, 1]
+  - [2, 2]
+...
+-- Try to REPLACE after incorrect UPSERT.
+box.snapshot()
+---
+- ok
+...
+s:upsert({2, 2}, {{'=', 3, 30}})
+---
+...
+s:replace{2, 3}
+---
+- [2, 3]
+...
+s:select{}
+---
+- - [1, 1]
+  - [2, 3]
+...
+-- Try to UPSERT after incorrect UPSERT. In such a case all
+-- newer UPSERTs also are ignored.
+box.snapshot()
+---
+- ok
+...
+s:upsert({2, 2}, {{'=', 3, 40}})
+---
+...
+s:upsert({2, 2}, {{'=', 2, 50}})
+---
+...
+s:select{}
+---
+- - [1, 1]
+  - [2, 3]
+...
+s:drop()
+---
+...

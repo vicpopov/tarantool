@@ -6971,8 +6971,17 @@ vy_merge_iterator_squash_upsert(struct vy_merge_iterator *itr,
 					  itr->upsert_format, true);
 		++*upserts_applied;
 		tuple_unref(t);
-		if (applied == NULL)
+		if (applied == NULL) {
+			struct error *e = diag_last_error(diag_get());
+			/* Ignore upsert format error. */
+			if (strcmp(box_error_type(e), "ClientError") == 0) {
+				t = next;
+				tuple_ref(t);
+				error_log(e);
+				continue;
+			}
 			return -1;
+		}
 		t = applied;
 	}
 	*ret = t;
@@ -7837,6 +7846,19 @@ vy_read_iterator_next(struct vy_read_iterator *itr, struct tuple **result)
 							  true);
 				index->stat.upsert.applied++;
 				tuple_unref(t);
+				if (applied == NULL) {
+					struct error *e =
+						diag_last_error(diag_get());
+					/*
+					 * Ignore upsert format
+					 * error.
+					 */
+					if (strcmp(box_error_type(e),
+						   "ClientError") == 0) {
+						error_log(e);
+						continue;
+					}
+				}
 				t = applied;
 				assert(vy_stmt_type(t) == IPROTO_REPLACE);
 			}
@@ -8553,10 +8575,18 @@ vy_squash_process(struct vy_squash *squash)
 		struct tuple *applied =
 			vy_apply_upsert(mem_stmt, result, def, mem->format,
 					mem->upsert_format, true);
+		if (applied == NULL) {
+			struct error *e = diag_last_error(diag_get());
+			/* Ignore upsert format error. */
+			if (strcmp(box_error_type(e), "ClientError") == 0) {
+				error_log(e);
+				continue;
+			}
+			tuple_unref(result);
+			return -1;
+		}
 		index->stat.upsert.applied++;
 		tuple_unref(result);
-		if (applied == NULL)
-			return -1;
 		result = applied;
 		/**
 		 * In normal cases we get a result with the same lsn as

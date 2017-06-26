@@ -956,8 +956,18 @@ func_call(struct func *func, struct request *request, struct obuf *out)
 	/* Clear all previous errors */
 	diag_clear(&fiber()->diag);
 	assert(!in_txn()); /* transaction is not started */
+	box_function_f f = func->func;
+	func->active_calls++;
 	/* Call function from the shared library */
 	int rc = func->func(&ctx, request->tuple, request->tuple_end);
+	func->active_calls--;
+	if (func->func != f) {
+		/*
+		 * function was reloaded 
+		 * needs to be deleted
+		 */
+		func_delete(func);
+	}
 	if (rc != 0) {
 		if (diag_last_error(&fiber()->diag) == NULL) {
 			/* Stored procedure forget to set diag  */
@@ -1008,6 +1018,22 @@ error:
 	port_destroy(&port);
 	txn_rollback();
 	return -1;
+}
+
+void
+box_func_reload(const char* name)
+{
+	struct func *func = access_check_func(name, strlen(name));
+	if (func->state != LOADED) {
+		say_warn("try to reload not loaded function %s", name);
+		return;
+	}
+	if (func->def->language != FUNC_LANGUAGE_C) {
+		say_warn("no reload for lua function");
+		return;
+	}
+	func = func_reload(func);
+	func_cache_update(func);
 }
 
 void

@@ -173,6 +173,9 @@ box_select(struct port *port, uint32_t space_id, uint32_t index_id,
 	   int iterator, uint32_t offset, uint32_t limit,
 	   const char *key, const char *key_end);
 
+/* box_func_reload is private and used only by FFI */
+void
+box_func_reload(const char *name);
 /** \cond public */
 
 /*

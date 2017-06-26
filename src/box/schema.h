@@ -227,6 +227,9 @@ func_cache_replace(struct func_def *def);
 void
 func_cache_delete(uint32_t fid);
 
+void
+func_cache_update(struct func *func);
+
 struct func;
 
 struct func *

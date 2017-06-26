@@ -398,6 +398,42 @@ error:
 }
 
 void
+func_cache_update(struct func *func)
+{
+	/* delete old records */
+	assert(func->def);
+	mh_int_t k = mh_i32ptr_find(funcs, func->def->fid, NULL);
+	if (k != mh_end(funcs)) {
+		mh_i32ptr_del(funcs, k, NULL);
+		k = mh_strnptr_find_inp(funcs_by_name, func->def->name,
+				strlen(func->def->name));
+		if (k != mh_end(funcs))
+			mh_strnptr_del(funcs_by_name, k, NULL);
+	}
+	/* create new records */
+	const struct mh_i32ptr_node_t node = { func->def->fid, func };
+	mh_int_t k1 = mh_i32ptr_put(funcs, &node, NULL, NULL);
+	if (k1 == mh_end(funcs)) {
+		func_delete(func);
+error:
+		panic_syserror("Out of memory for the data "
+			"dictionary cache (stored function).");
+	}
+	size_t def_name_len = strlen(func->def->name);
+	uint32_t name_hash = mh_strn_hash(func->def->name, def_name_len);
+	const struct mh_strnptr_node_t strnode = {
+		func->def->name, def_name_len, name_hash, func };
+
+	mh_int_t k2 = mh_strnptr_put(funcs_by_name, &strnode, NULL, NULL);
+	if (k2 == mh_end(funcs_by_name)) {
+		mh_i32ptr_del(funcs, k1, NULL);
+		func->def = NULL;
+		func_delete(func);
+		goto error;
+	}
+}
+
+void
 func_cache_delete(uint32_t fid)
 {
 	mh_int_t k = mh_i32ptr_find(funcs, fid, NULL);

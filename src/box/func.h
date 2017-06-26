@@ -36,6 +36,10 @@
 extern "C" {
 #endif /* defined(__cplusplus) */
 
+enum load_state {
+	LOADED,
+	NOT_LOADED,
+};
 /**
  * Stored function.
  */
@@ -59,6 +63,15 @@ struct func {
 	 * Cached runtime access information.
 	 */
 	struct access access[BOX_USER_MAX];
+	/**
+	 * Active calls in this function.
+	 * Used in reload.
+	 */
+	uint32_t active_calls;
+	/**
+	 * State of the load function
+	 */
+	load_state state;
 };
 
 #if defined(__cplusplus)
@@ -80,6 +93,11 @@ func_delete(struct func *func);
 void
 func_load(struct func *func);
 
+/**
+ * Reloads loaded function
+ */
+struct func *
+func_reload(struct func *func);
 #endif /* defined(__cplusplus) */
 
 #endif /* TARANTOOL_BOX_FUNC_H_INCLUDED */

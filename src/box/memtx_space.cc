@@ -587,12 +587,15 @@ MemtxSpace::checkIndexDef(struct space *space, struct index_def *index_def)
 Index *
 MemtxSpace::createIndex(struct space *space, struct index_def *index_def_arg)
 {
-	(void) space;
+	struct index_def *primary_index_def = NULL;
+	if (index_def_arg->iid != 0)
+		primary_index_def = space_index(space, 0)->index_def;
+
 	switch (index_def_arg->type) {
 	case HASH:
 		return new MemtxHash(index_def_arg);
 	case TREE:
-		return new MemtxTree(index_def_arg);
+		return new MemtxTree(index_def_arg, primary_index_def);
 	case RTREE:
 		return new MemtxRTree(index_def_arg);
 	case BITSET:

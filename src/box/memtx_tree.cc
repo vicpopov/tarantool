@@ -71,11 +71,20 @@ memtx_tree_qcompare(const void* a, const void *b, void *c)
 
 /* {{{ MemtxTree Iterators ****************************************/
 struct tree_iterator {
+	/** Parent class (must be first) */
 	struct iterator base;
+	/** BPS Tree */
 	const struct memtx_tree *tree;
+	/** Index Definition for comparators */
 	struct index_def *index_def;
+	/** BPS Tree Iterator */
 	struct memtx_tree_iterator tree_iterator;
+	/** Iterator Type */
+	enum iterator_type type;
+	/** The search key */
 	struct key_data key_data;
+	/** The last returned tuple */
+	struct tuple *current_tuple;
 };
 
 static void
@@ -91,6 +100,9 @@ tree_iterator(struct iterator *it)
 static void
 tree_iterator_free(struct iterator *iterator)
 {
+	struct tree_iterator *it = tree_iterator(iterator);
+	if (it->current_tuple != NULL)
+		tuple_unref(it->current_tuple);
 	free(iterator);
 }
 
@@ -98,17 +110,39 @@ static struct tuple *
 tree_iterator_dummie(struct iterator *iterator)
 {
 	(void)iterator;
-	return 0;
+	return NULL;
+}
+
+static struct tuple *
+tree_iterator_finish(struct tree_iterator *it)
+{
+	it->current_tuple = NULL;
+	it->tree_iterator = memtx_tree_invalid_iterator();
+	it->base.next = tree_iterator_dummie;
+	return NULL;
 }
 
 static struct tuple *
 tree_iterator_fwd(struct iterator *iterator)
 {
 	struct tree_iterator *it = tree_iterator(iterator);
-	tuple **res = memtx_tree_iterator_get_elem(it->tree, &it->tree_iterator);
-	if (!res)
-		return 0;
-	memtx_tree_iterator_next(it->tree, &it->tree_iterator);
+	assert(it->current_tuple != NULL);
+	struct tuple **check =
+		memtx_tree_iterator_get_elem(it->tree, &it->tree_iterator);
+	if (check == NULL || *check != it->current_tuple) {
+		it->tree_iterator =
+			memtx_tree_upper_bound_elem(it->tree,
+						    it->current_tuple, NULL);
+	} else {
+		memtx_tree_iterator_next(it->tree, &it->tree_iterator);
+	}
+	tuple_unref(it->current_tuple);
+	struct tuple **res =
+		memtx_tree_iterator_get_elem(it->tree, &it->tree_iterator);
+	if (res == NULL)
+		return tree_iterator_finish(it);
+	it->current_tuple = *res;
+	tuple_ref(it->current_tuple);
 	return *res;
 }
 
@@ -116,10 +150,22 @@ static struct tuple *
 tree_iterator_bwd(struct iterator *iterator)
 {
 	struct tree_iterator *it = tree_iterator(iterator);
-	tuple **res = memtx_tree_iterator_get_elem(it->tree, &it->tree_iterator);
-	if (!res)
-		return 0;
+	assert(it->current_tuple != NULL);
+	struct tuple **check =
+		memtx_tree_iterator_get_elem(it->tree, &it->tree_iterator);
+	if (check == NULL || *check != it->current_tuple) {
+		it->tree_iterator =
+			memtx_tree_lower_bound_elem(it->tree, it->current_tuple,
+						    NULL);
+	}
 	memtx_tree_iterator_prev(it->tree, &it->tree_iterator);
+	tuple_unref(it->current_tuple);
+	struct tuple **res =
+		memtx_tree_iterator_get_elem(it->tree, &it->tree_iterator);
+	if (res == NULL)
+		return tree_iterator_finish(it);
+	it->current_tuple = *res;
+	tuple_ref(it->current_tuple);
 	return *res;
 }
 
@@ -127,61 +173,159 @@ static struct tuple *
 tree_iterator_fwd_check_equality(struct iterator *iterator)
 {
 	struct tree_iterator *it = tree_iterator(iterator);
-	tuple **res = memtx_tree_iterator_get_elem(it->tree, &it->tree_iterator);
-	if (!res)
-		return 0;
-	if (memtx_tree_compare_key(*res, &it->key_data, it->index_def) != 0) {
-		it->tree_iterator = memtx_tree_invalid_iterator();
-		return 0;
+	assert(it->current_tuple != NULL);
+	struct tuple **check =
+		memtx_tree_iterator_get_elem(it->tree, &it->tree_iterator);
+	if (check == NULL || *check != it->current_tuple) {
+		it->tree_iterator =
+			memtx_tree_upper_bound_elem(it->tree, it->current_tuple,
+						    NULL);
+	} else {
+		memtx_tree_iterator_next(it->tree, &it->tree_iterator);
 	}
-	memtx_tree_iterator_next(it->tree, &it->tree_iterator);
+	tuple_unref(it->current_tuple);
+	struct tuple **res =
+		memtx_tree_iterator_get_elem(it->tree, &it->tree_iterator);
+	if (!res || memtx_tree_compare_key(*res, &it->key_data,
+					   it->index_def) != 0)
+		return tree_iterator_finish(it);
+	it->current_tuple = *res;
+	tuple_ref(it->current_tuple);
 	return *res;
-}
-
-static struct tuple *
-tree_iterator_fwd_check_next_equality(struct iterator *iterator)
-{
-	struct tree_iterator *it = tree_iterator(iterator);
-	tuple **res = memtx_tree_iterator_get_elem(it->tree, &it->tree_iterator);
-	if (!res)
-		return 0;
-	memtx_tree_iterator_next(it->tree, &it->tree_iterator);
-	iterator->next = tree_iterator_fwd_check_equality;
-	return *res;
-}
-
-static struct tuple *
-tree_iterator_bwd_skip_one(struct iterator *iterator)
-{
-	struct tree_iterator *it = tree_iterator(iterator);
-	memtx_tree_iterator_prev(it->tree, &it->tree_iterator);
-	iterator->next = tree_iterator_bwd;
-	return tree_iterator_bwd(iterator);
 }
 
 static struct tuple *
 tree_iterator_bwd_check_equality(struct iterator *iterator)
 {
 	struct tree_iterator *it = tree_iterator(iterator);
-	tuple **res = memtx_tree_iterator_get_elem(it->tree, &it->tree_iterator);
-	if (!res)
-		return 0;
-	if (memtx_tree_compare_key(*res, &it->key_data, it->index_def) != 0) {
-		it->tree_iterator = memtx_tree_invalid_iterator();
-		return 0;
-	}
+	assert(it->current_tuple != NULL);
+	struct tuple **check =
+		memtx_tree_iterator_get_elem(it->tree, &it->tree_iterator);
+	if (check == NULL || *check != it->current_tuple)
+		it->tree_iterator =
+			memtx_tree_lower_bound_elem(it->tree, it->current_tuple,
+						    NULL);
 	memtx_tree_iterator_prev(it->tree, &it->tree_iterator);
+	tuple_unref(it->current_tuple);
+	struct tuple **res =
+		memtx_tree_iterator_get_elem(it->tree, &it->tree_iterator);
+	if (!res || memtx_tree_compare_key(*res, &it->key_data,
+					   it->index_def) != 0)
+		return tree_iterator_finish(it);
+	it->current_tuple = *res;
+	tuple_ref(it->current_tuple);
 	return *res;
 }
 
+static void
+tree_iterator_determine_next_method(struct tree_iterator *it)
+{
+	assert(it->current_tuple != NULL);
+	switch (it->type) {
+	case ITER_EQ:
+		it->base.next = tree_iterator_fwd_check_equality;
+		break;
+	case ITER_REQ:
+		it->base.next = tree_iterator_bwd_check_equality;
+		break;
+	case ITER_ALL:
+		it->base.next = tree_iterator_fwd;
+		break;
+	case ITER_LT:
+	case ITER_LE:
+		it->base.next = tree_iterator_bwd;
+		break;
+	case ITER_GE:
+	case ITER_GT:
+		it->base.next = tree_iterator_fwd;
+		break;
+	default:
+		/* The type was checked in initIterator */
+		unreachable();
+	}
+}
+
+/**
+ * Virtual method of an iterator that returns previously returned tuple
+ * again and set the method to a proper function determined by iteration type.
+ * @param iterator - iterator object.
+ * @return - the same tuple as in the last return.
+ */
 static struct tuple *
-tree_iterator_bwd_skip_one_check_next_equality(struct iterator *iterator)
+tree_iterator_repeat(struct iterator *iterator)
 {
 	struct tree_iterator *it = tree_iterator(iterator);
-	memtx_tree_iterator_prev(it->tree, &it->tree_iterator);
-	iterator->next = tree_iterator_bwd_check_equality;
-	return tree_iterator_bwd_check_equality(iterator);
+	if (it->current_tuple == NULL) {
+		iterator->next = tree_iterator_dummie;
+		return NULL;
+	}
+	tree_iterator_determine_next_method(it);
+	return it->current_tuple;
 }
+
+static struct tuple *
+tree_iterator_start(struct iterator *iterator)
+{
+	struct tree_iterator *it = tree_iterator(iterator);
+	it->base.next = tree_iterator_dummie;
+	const memtx_tree *tree = it->tree;
+	enum iterator_type type = it->type;
+	bool exact = false;
+	if (it->key_data.part_count == 0) {
+		/*
+		 * If no key is specified, downgrade equality
+		 * iterators to a full range.
+		 */
+		it->key_data.key = NULL;
+		if (iterator_type_is_reverse(it->type)) {
+			it->type = ITER_LE;
+			it->tree_iterator = memtx_tree_iterator_last(tree);
+		} else {
+			it->type = ITER_GE;
+			it->tree_iterator = memtx_tree_iterator_first(tree);
+		}
+	} else {
+		if (type == ITER_ALL || type == ITER_EQ ||
+		    type == ITER_GE || type == ITER_LT) {
+			it->tree_iterator =
+				memtx_tree_lower_bound(tree, &it->key_data,
+						       &exact);
+			if (type == ITER_EQ && !exact)
+				return NULL;
+		} else { /* ITER_GT, ITER_REQ, ITER_LE */
+			it->tree_iterator =
+				memtx_tree_upper_bound(tree, &it->key_data,
+						       &exact);
+			if (type == ITER_REQ && !exact)
+				return NULL;
+		}
+		if (iterator_type_is_reverse(type)) {
+			/*
+			 * Because of limitations of tree search API we use use
+			 * lower_bound for LT search and upper_bound for LE
+			 * and REQ searches. Thus we found position to the
+			 * right of the target one. Let's make a step to the
+			 * left to reach target position.
+			 * If we found an invalid iterator all the elements in
+			 * the tree are less (less or equal) to the key, and
+			 * iterator_next call will convert the iterator to the
+			 * last position in the tree, that's what we need.
+			 */
+			memtx_tree_iterator_prev(it->tree, &it->tree_iterator);
+		}
+	}
+
+	struct tuple **res = memtx_tree_iterator_get_elem(it->tree,
+							  &it->tree_iterator);
+	if (!res)
+		return tree_iterator_finish(it);
+	assert(it->current_tuple == NULL);
+	it->current_tuple = *res;
+	tuple_ref(it->current_tuple);
+	tree_iterator_determine_next_method(it);
+	return *res;
+}
+
 /* }}} */
 
 /* {{{ MemtxTree  **********************************************************/
@@ -293,66 +437,15 @@ MemtxTree::initIterator(struct iterator *iterator, enum iterator_type type,
 	assert(part_count == 0 || key != NULL);
 	struct tree_iterator *it = tree_iterator(iterator);
 
-	if (part_count == 0) {
-		/*
-		 * If no key is specified, downgrade equality
-		 * iterators to a full range.
-		 */
-		if (type < 0 || type > ITER_GT) {
-			return Index::initIterator(iterator, type, key,
-						   part_count);
-		}
-		type = iterator_type_is_reverse(type) ? ITER_LE : ITER_GE;
-		key = 0;
-	}
+	if (type < 0 || type > ITER_GT) /* Unsupported type */
+		return Index::initIterator(iterator, type, key, part_count);
+
+	it->type = type;
 	it->key_data.key = key;
 	it->key_data.part_count = part_count;
-
-	bool exact = false;
-	if (key == 0) {
-		if (iterator_type_is_reverse(type))
-			it->tree_iterator = memtx_tree_invalid_iterator();
-		else
-			it->tree_iterator = memtx_tree_iterator_first(&tree);
-	} else {
-		if (type == ITER_ALL || type == ITER_EQ || type == ITER_GE || type == ITER_LT) {
-			it->tree_iterator = memtx_tree_lower_bound(&tree, &it->key_data, &exact);
-			if (type == ITER_EQ && !exact) {
-				it->base.next = tree_iterator_dummie;
-				return;
-			}
-		} else { // ITER_GT, ITER_REQ, ITER_LE
-			it->tree_iterator = memtx_tree_upper_bound(&tree, &it->key_data, &exact);
-			if (type == ITER_REQ && !exact) {
-				it->base.next = tree_iterator_dummie;
-				return;
-			}
-		}
-	}
-
-	switch (type) {
-	case ITER_EQ:
-		it->base.next = tree_iterator_fwd_check_next_equality;
-		break;
-	case ITER_REQ:
-		it->base.next = tree_iterator_bwd_skip_one_check_next_equality;
-		break;
-	case ITER_ALL:
-	case ITER_GE:
-		it->base.next = tree_iterator_fwd;
-		break;
-	case ITER_GT:
-		it->base.next = tree_iterator_fwd;
-		break;
-	case ITER_LE:
-		it->base.next = tree_iterator_bwd_skip_one;
-		break;
-	case ITER_LT:
-		it->base.next = tree_iterator_bwd_skip_one;
-		break;
-	default:
-		return Index::initIterator(iterator, type, key, part_count);
-	}
+	it->current_tuple = NULL;
+	it->base.next = tree_iterator_start;
+	it->tree_iterator = memtx_tree_invalid_iterator();
 }
 
 void
@@ -423,6 +516,17 @@ void
 MemtxTree::createReadViewForIterator(struct iterator *iterator)
 {
 	struct tree_iterator *it = tree_iterator(iterator);
+
+	/*
+	 * The read view of the tree is integrated the tree_iterator.
+	 * At the same time tree_iterator member can be recreated if the
+	 * tree was changed, and the read view will be lost.
+	 * To prevent it, for the last time call ->next method without
+	 * a read view and create the read view immediately.
+	 */
+	iterator->next(iterator);
+	iterator->next = tree_iterator_repeat;
+
 	struct memtx_tree *tree = (struct memtx_tree *)it->tree;
 	memtx_tree_iterator_freeze(tree, &it->tree_iterator);
 }

@@ -318,3 +318,66 @@ box.commit()
 
 s:select{}
 s:drop{}
+
+-- implement lazy iterator positioning
+s = box.schema.space.create('test' ,{engine=engine})
+i = s:create_index('i', { type = 'tree', parts = {1, 'unsigned', 2, 'unsigned'} })
+for i = 1,3 do for j = 1,3 do s:replace{i, j} end end
+
+itr1,itr2,itr3 = s:pairs{2}
+_ = s:replace{1, 4}
+r = {}
+for k,v in itr1,itr2,itr3 do table.insert(r, v) end
+r
+
+itr1,itr2,itr3 = s:pairs({2}, {iterator = 'GE'})
+_ = s:replace{1, 5}
+r = {}
+for k,v in itr1,itr2,itr3 do table.insert(r, v) end
+r
+
+itr1,itr2,itr3 = s:pairs({2}, {iterator = 'REQ'})
+s:replace{2, 4}
+r = {}
+for k,v in itr1,itr2,itr3 do table.insert(r, v) end
+r
+
+r = nil
+s:drop()
+
+-- make tree iterators stable
+-- https://github.com/tarantool/tarantool/issues/1796
+s = box.schema.space.create('test')
+i = s:create_index('i', { type = 'tree', parts = {1, 'unsigned'} })
+
+for i = 1,10 do s:replace{i} end
+r = {}
+for k,v in s:pairs{} do table.insert(r, v[1]) s:delete(v[1]) end
+r
+s:select{}
+
+for i = 1,10 do s:replace{i} end
+r = {}
+for k,v in s:pairs({}, {iterator = 'REQ'}) do table.insert(r, v[1]) s:delete(v[1]) end
+r
+s:select{}
+
+s:drop()
+
+s = box.schema.space.create('test')
+i = s:create_index('i', { type = 'tree', parts = {1, 'unsigned', 2, 'unsigned'} })
+
+for i = 1,3 do for j = 1,3 do s:replace{i, j} end end
+r = {}
+for k,v in s:pairs{2} do table.insert(r, v) s:delete{v[1], v[2]} end
+r
+s:select{}
+
+for i = 1,3 do for j = 1,3 do s:replace{i, j} end end
+r = {}
+for k,v in s:pairs({3}, {iterator = 'REQ'}) do table.insert(r, v) s:delete{v[1], v[2]} end
+r
+s:select{}
+
+r = nil
+s:drop()

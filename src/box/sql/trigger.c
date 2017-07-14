@@ -101,6 +101,9 @@ void sqlite3BeginTrigger(
   int iDb;                /* The database to store the trigger in */
   Token *pName;           /* The unqualified db name */
   DbFixer sFix;           /* State vector for the DB fixer */
+  static const char * sysTables[] = { "_trigger", "_space", "_index" };
+  int sysTablesAmount = 3;
+  int iSysTable;
 
   assert( pName1!=0 );   /* pName1->z might be NULL, but not pName1 itself */
   assert( pName2!=0 );
@@ -195,10 +198,16 @@ void sqlite3BeginTrigger(
   }
 
   /* Do not create a trigger on a system table */
-  if( sqlite3StrNICmp(pTab->zName, "sqlite_", 7)==0 ){
-    sqlite3ErrorMsg(pParse, "cannot create trigger on system table");
-    goto trigger_cleanup;
+  for (iSysTable = 0; iSysTable < sysTablesAmount; iSysTable++) {
+    if ( sqlite3StrNICmp(pTab->zName, sysTables[iSysTable], strlen(sysTables[iSysTable]))== 0 ) {
+      sqlite3ErrorMsg(pParse, "cannot create trigger on system table");
+      goto trigger_cleanup;
+    }
   }
+//  if( sqlite3StrNICmp(pTab->zName, "sqlite_", 7)==0 ){
+//    sqlite3ErrorMsg(pParse, "cannot create trigger on system table");
+//    goto trigger_cleanup;
+//  }
 
   /* INSTEAD of triggers are only for views and views only support INSTEAD
   ** of triggers.

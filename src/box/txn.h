@@ -96,6 +96,12 @@ struct txn {
 	/** Engine-specific transaction data */
 	void *engine_tx;
 	/**
+	 * How much memory was used on fiber()->gc region when
+	 * this transaction began. Used to free memory allocated
+	 * by this transaction on commit or rollback.
+	 */
+	size_t region_svp;
+	/**
 	 * Triggers on fiber yield and stop to abort transaction
 	 * for in-memory engine.
 	 */

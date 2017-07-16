@@ -95,6 +95,7 @@ struct txn *
 txn_begin(bool is_autocommit)
 {
 	assert(! in_txn());
+	size_t region_svp = region_used(&fiber()->gc);
 	struct txn *txn = region_alloc_object_xc(&fiber()->gc, struct txn);
 	/* Initialize members explicitly to save time on memset() */
 	stailq_create(&txn->stmts);
@@ -105,6 +106,7 @@ txn_begin(bool is_autocommit)
 	txn->signature = -1;
 	txn->engine = NULL;
 	txn->engine_tx = NULL;
+	txn->region_svp = region_svp;
 	/* fiber_on_yield/fiber_on_stop initialized by engine on demand */
 	fiber_set_txn(fiber(), txn);
 	return txn;
@@ -248,9 +250,10 @@ txn_commit(struct txn *txn)
 
 		txn->engine->commit(txn);
 	}
+	size_t region_svp = txn->region_svp;
 	TRASH(txn);
 	/** Free volatile txn memory. */
-	fiber_gc();
+	region_truncate(&fiber()->gc, region_svp);
 	fiber_set_txn(fiber(), NULL);
 }
 
@@ -291,9 +294,10 @@ txn_rollback()
 		trigger_run(&txn->on_rollback, txn); /* must not throw. */
 	if (txn->engine)
 		txn->engine->rollback(txn);
+	size_t region_svp = txn->region_svp;
 	TRASH(txn);
 	/** Free volatile txn memory. */
-	fiber_gc();
+	region_truncate(&fiber()->gc, region_svp);
 	fiber_set_txn(fiber(), NULL);
 }
 

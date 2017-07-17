@@ -266,6 +266,19 @@ primary_key_validate(struct key_def *key_def, const char *key,
 		     uint32_t part_count);
 
 /**
+ * Create a space format from a list of key_defs.
+ * Since secondary indexes can internally create their own key_defs
+ * by merging original key_def with a key_def of the primary index,
+ * the appropriate space format must follow this behaviour and create
+ * field offsets for possible merged key_defs.
+ * @param vtab - virtual table of desired format.
+ * @param key_list - a list of key_def @sa space_new
+ * @return - new unreferenced format (throws on error)
+ */
+struct tuple_format *
+create_space_format(struct tuple_format_vtab *vtab, struct rlist *key_list);
+
+/**
  * The manner in which replace in a unique index must treat
  * duplicates (tuples with the same value of indexed key),
  * possibly present in the index.

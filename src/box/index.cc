@@ -38,6 +38,7 @@
 #include "txn.h"
 #include "rmean.h"
 #include "info.h"
+#include "scoped_guard.h"
 
 /* {{{ Utilities. **********************************************/
 
@@ -141,6 +142,63 @@ primary_key_validate(struct key_def *key_def, const char *key,
 		return -1;
 	}
 	return key_validate_parts(key_def, key, part_count);
+}
+
+/**
+ * Create a space format from a list of index_defs.
+ * Since secondary indexes can internally create their own key_defs
+ * by merging original key_def with a key_def of the primary index,
+ * the appropriate space format must consider this behaviour and create
+ * field offsets for merged key_defs' fields.
+ * @param vtab - virtual table of desired format.
+ * @param key_list - a list of index_defs @sa space_new
+ * @return - new unreferenced format (throws on error)
+ */
+struct tuple_format *
+create_space_format(struct tuple_format_vtab *vtab, struct rlist *key_list)
+{
+	uint16_t key_count = 0;
+	struct index_def *index_def;
+	struct index_def *pk = NULL;
+	rlist_foreach_entry(index_def, key_list, link) {
+		key_count++;
+		/* Find the primary key, we need to create it first. */
+		if (index_def->iid == 0)
+			pk = index_def;
+	}
+	/* A space with a secondary key without a primary is illegal. */
+	assert(key_count == 0 || pk != NULL);
+	struct key_def **keys = (struct key_def **)
+		region_alloc_xc(&fiber()->gc, sizeof(*keys) * key_count);
+	uint32_t key_no = 0;
+	rlist_foreach_entry(index_def, key_list, link) {
+		if (index_def->type == TREE && !index_def->opts.is_unique) {
+			/*
+			 * Tree index will use its own key_def different
+			 * from index_def->key_def. We have to create similar
+			 * temporary key_def and pass it to tuple_format_new
+			 * in order to create proper field map.
+			 */
+			struct key_def *tree_key_def =
+				key_def_merge(&index_def->key_def,
+					      &pk->key_def);
+			auto tree_key_def_guard = make_scoped_guard(
+				[&]() { box_key_def_delete(tree_key_def); });
+			size_t key_def_size =
+				key_def_sizeof(tree_key_def->part_count);
+			struct key_def *key_def = (struct key_def *)
+				region_alloc_xc(&fiber()->gc, key_def_size);
+			memcpy(key_def, tree_key_def, key_def_size);
+			keys[key_no++] = key_def;
+		} else {
+			keys[key_no++] = &index_def->key_def;
+		}
+	}
+	assert(key_no == key_count);
+	struct tuple_format *fmt = tuple_format_new(vtab, keys, key_count, 0);
+	if (fmt == NULL)
+		diag_raise();
+	return fmt;
 }
 
 char *

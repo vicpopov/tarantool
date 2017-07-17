@@ -365,3 +365,14 @@ s:select{}
 errinj.set("ERRINJ_WAL_WRITE_DISK", false)
 
 s:drop()
+
+-- check that tuple format sutisfies non-unique index
+s = box.schema.space.create('test', {engine = 'vinyl'})
+_ = s:create_index('i1', {parts = {1, 'uint', 2, 'uint', 3, 'uint'}})
+_ = s:create_index('i2', {parts = {2, 'uint'}, unique = false})
+errinj.set("ERRINJ_TUPLE_FIELD", true)
+s:replace{1, 2, 3}
+s:replace{3, 4, 6}
+errinj.set("ERRINJ_TUPLE_FIELD", false)
+
+s:drop()

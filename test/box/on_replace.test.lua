@@ -176,3 +176,60 @@ first:on_replace(nil, trigger_id)
 
 first:drop()
 second:drop()
+
+
+-- on_commit trigger
+ts = box.schema.space.create('test_space')
+_ = ts:create_index('primary', {unique = true, parts = {1, 'unsigned'}})
+_ = ts:create_index('secondary', {unique = false, parts = {2, 'string'}})
+
+out = {}
+function save_out(old_tuple, new_tuple) out[#out + 1] = {old = old_tuple, new = new_tuple} end
+_ = ts:on_commit(save_out)
+
+_ = ts:insert{123, 'abc'}
+out
+_ = ts:insert{456, 'def'}
+out
+
+function fail() error('test') end
+_ = ts:on_replace(fail)
+
+out = {}
+_ = ts:insert{789, 'ghi'}
+out
+
+_ = ts:on_replace(nil, fail)
+
+out = {}
+test_run:cmd("setopt delimiter ';'")
+box.begin()
+_ = ts:replace{123, 'aaa'}
+out1 = table.deepcopy(out)
+_ = ts:replace{456, 'bbb'}
+out2 = table.deepcopy(out)
+box.commit()
+test_run:cmd("setopt delimiter ''");
+out1
+out2
+out
+
+out = {}
+test_run:cmd("setopt delimiter ';'")
+box.begin()
+_ = ts:replace{123, 'AAA'}
+_ = ts:replace{456, 'BBB'}
+test_run:cmd("setopt delimiter ''");
+box.rollback()
+out
+
+_ = ts:on_commit(nil, save_out)
+
+out = {}
+_ = ts:replace{789, 'ccc'}
+out
+
+ts.index.primary:select()
+ts.index.secondary:select()
+
+ts:drop()

@@ -46,14 +46,9 @@ extern "C" {
 #include "box/txn.h"
 #include "box/vclock.h" /* VCLOCK_MAX */
 
-/**
- * Trigger function for all spaces
- */
 static int
-lbox_push_on_replace_event(struct lua_State *L, void *event)
+lbox_push_txn_stmt(struct lua_State *L, struct txn_stmt *stmt)
 {
-	struct txn_stmt *stmt = txn_current_stmt((struct txn *) event);
-
 	if (stmt->old_tuple) {
 		luaT_pushtuple(L, stmt->old_tuple);
 	} else {
@@ -67,6 +62,13 @@ lbox_push_on_replace_event(struct lua_State *L, void *event)
 	/* @todo: maybe the space object has to be here */
 	lua_pushstring(L, stmt->space->def->name);
 	return 3;
+}
+
+static int
+lbox_push_txn_on_replace_event(struct lua_State *L, void *event)
+{
+	struct txn_stmt *stmt = txn_current_stmt((struct txn *) event);
+	return lbox_push_txn_stmt(L, stmt);
 }
 
 /**
@@ -87,7 +89,35 @@ lbox_space_on_replace(struct lua_State *L)
 	lua_pop(L, 1);
 
 	return lbox_trigger_reset(L, 3, &space->on_replace,
-				  lbox_push_on_replace_event);
+				  lbox_push_txn_on_replace_event);
+}
+
+static int
+lbox_push_txn_on_commit_event(struct lua_State *L, void *event)
+{
+	struct txn_stmt *stmt = (struct txn_stmt *) event;
+	return lbox_push_txn_stmt(L, stmt);
+}
+
+/**
+ * Set/Reset/Get space.on_commit trigger
+ */
+static int
+lbox_space_on_commit(struct lua_State *L)
+{
+	int top = lua_gettop(L);
+
+	if (top < 1 || !lua_istable(L, 1)) {
+		luaL_error(L,
+	   "usage: space:on_commit(function | nil, [function | nil])");
+	}
+	lua_getfield(L, 1, "id"); /* Get space id. */
+	uint32_t id = lua_tonumber(L, lua_gettop(L));
+	struct space *space = space_cache_find(id);
+	lua_pop(L, 1);
+
+	return lbox_trigger_reset(L, 3, &space->on_commit,
+				  lbox_push_txn_on_commit_event);
 }
 
 /**
@@ -133,6 +163,11 @@ lbox_fillspace(struct lua_State *L, struct space *space, int i)
         /* space:on_replace */
         lua_pushstring(L, "on_replace");
         lua_pushcfunction(L, lbox_space_on_replace);
+        lua_settable(L, i);
+
+        /* space:on_commit */
+        lua_pushstring(L, "on_commit");
+        lua_pushcfunction(L, lbox_space_on_commit);
         lua_settable(L, i);
 
 	lua_getfield(L, i, "index");

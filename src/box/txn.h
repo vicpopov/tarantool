@@ -108,6 +108,8 @@ struct txn {
 	struct trigger fiber_on_yield, fiber_on_stop;
 	 /** Commit and rollback triggers */
 	struct rlist on_commit, on_rollback;
+	/** Added to txn->on_commit to run space->on_commit triggers. */
+	struct trigger space_on_commit;
 };
 
 /* Pointer to the current transaction (if any) */

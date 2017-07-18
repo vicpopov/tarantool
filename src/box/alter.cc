@@ -622,6 +622,8 @@ alter_space_rollback(struct trigger *trigger, void * /* event */)
 	 */
 	rlist_swap(&alter->new_space->on_replace,
 		   &alter->old_space->on_replace);
+	rlist_swap(&alter->new_space->on_commit,
+		   &alter->old_space->on_commit);
 	rlist_swap(&alter->new_space->on_stmt_begin,
 		   &alter->old_space->on_stmt_begin);
 	struct space *new_space = space_cache_replace(alter->old_space);
@@ -721,6 +723,8 @@ alter_space_do(struct txn *txn, struct alter_space *alter)
 	 */
 	rlist_swap(&alter->new_space->on_replace,
 		   &alter->old_space->on_replace);
+	rlist_swap(&alter->new_space->on_commit,
+		   &alter->old_space->on_commit);
 	rlist_swap(&alter->new_space->on_stmt_begin,
 		   &alter->old_space->on_stmt_begin);
 	/*

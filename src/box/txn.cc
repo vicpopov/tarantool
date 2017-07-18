@@ -91,6 +91,19 @@ txn_stmt_new(struct txn *txn)
 	return stmt;
 }
 
+/** txn->space_on_commit callback function. */
+static void
+txn_space_on_commit(struct trigger * /* trigger */, void *event)
+{
+	struct txn *txn = (struct txn *) event;
+	struct txn_stmt *stmt;
+	stailq_foreach_entry(stmt, &txn->stmts, next) {
+		if (stmt->space->run_triggers &&
+		    (stmt->old_tuple || stmt->new_tuple))
+			trigger_run(&stmt->space->on_commit, stmt);
+	}
+}
+
 struct txn *
 txn_begin(bool is_autocommit)
 {
@@ -107,6 +120,7 @@ txn_begin(bool is_autocommit)
 	txn->engine = NULL;
 	txn->engine_tx = NULL;
 	txn->region_svp = region_svp;
+	trigger_create(&txn->space_on_commit, txn_space_on_commit, NULL, NULL);
 	/* fiber_on_yield/fiber_on_stop initialized by engine on demand */
 	fiber_set_txn(fiber(), txn);
 	return txn;
@@ -176,9 +190,16 @@ txn_commit_stmt(struct txn *txn, struct request *request)
 	 * - perhaps we should run triggers even for deletes which
 	 *   doesn't find any rows
 	 */
-	if (!rlist_empty(&stmt->space->on_replace) &&
-	    stmt->space->run_triggers && (stmt->old_tuple || stmt->new_tuple)) {
-		trigger_run(&stmt->space->on_replace, txn);
+	if (stmt->space->run_triggers && (stmt->old_tuple || stmt->new_tuple)) {
+		if (!rlist_empty(&stmt->space->on_replace))
+			trigger_run(&stmt->space->on_replace, txn);
+		/*
+		 * If the space has on_commit triggers install a trigger
+		 * to run them from txn_commit().
+		 */
+		if (!rlist_empty(&stmt->space->on_commit) &&
+		    rlist_empty(&txn->space_on_commit.link))
+			txn_on_commit(txn, &txn->space_on_commit);
 	}
 	--txn->in_sub_stmt;
 	if (txn->is_autocommit && txn->in_sub_stmt == 0)

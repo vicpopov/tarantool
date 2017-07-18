@@ -52,6 +52,8 @@ struct space {
 
 	/** Triggers fired after space_replace() -- see txn_commit_stmt(). */
 	struct rlist on_replace;
+	/** Triggers fired after WAL write -- see txn_commit(). */
+	struct rlist on_commit;
 	/** Triggers fired before space statement */
 	struct rlist on_stmt_begin;
 	/* Number of bytes used in memory by tuples in the space. */

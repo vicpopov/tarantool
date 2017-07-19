@@ -35,44 +35,6 @@ void sqlite3DeleteTriggerStep(sqlite3 *db, TriggerStep *pTriggerStep){
   }
 }
 
-/*
-** Given table pTab, return a list of all the triggers attached to 
-** the table. The list is connected by Trigger.pNext pointers.
-**
-** All of the triggers on pTab that are in the same database as pTab
-** are already attached to pTab->pTrigger.  But there might be additional
-** triggers on pTab in the TEMP schema.  This routine prepends all
-** TEMP triggers on pTab to the beginning of the pTab->pTrigger list
-** and returns the combined list.
-**
-** To state it another way:  This routine returns a list of all triggers
-** that fire off of pTab.  The list will include any TEMP triggers on
-** pTab as well as the triggers lised in pTab->pTrigger.
-*/
-Trigger *sqlite3TriggerList(Parse *pParse, Table *pTab){
-  Schema * const pTmpSchema = pParse->db->aDb[1].pSchema;
-  Trigger *pList = 0;                  /* List of triggers to return */
-
-  if( pParse->disableTriggers ){
-    return 0;
-  }
-
-  if( pTmpSchema!=pTab->pSchema ){
-    HashElem *p;
-    assert( sqlite3SchemaMutexHeld(pParse->db, 0, pTmpSchema) );
-    for(p=sqliteHashFirst(&pTmpSchema->trigHash); p; p=sqliteHashNext(p)){
-      Trigger *pTrig = (Trigger *)sqliteHashData(p);
-      if( pTrig->pTabSchema==pTab->pSchema
-       && 0==sqlite3StrICmp(pTrig->table, pTab->zName) 
-      ){
-        pTrig->pNext = (pList ? pList : pTab->pTrigger);
-        pList = pTrig;
-      }
-    }
-  }
-
-  return (pList ? pList : pTab->pTrigger);
-}
 
 /*
 ** This is called by the parser when it sees a CREATE TRIGGER statement
@@ -91,14 +53,14 @@ void sqlite3BeginTrigger(
   IdList *pColumns,   /* column list if this is an UPDATE OF trigger */
   SrcList *pTableName,/* The name of the table/view the trigger applies to */
   Expr *pWhen,        /* WHEN clause */
-  int isTemp,         /* True if the TEMPORARY keyword is present */
   int noErr           /* Suppress errors if the trigger already exists */
 ){
   Trigger *pTrigger = 0;  /* The new trigger */
   Table *pTab;            /* Table that the trigger fires off of */
   char *zName = 0;        /* Name of the trigger */
   sqlite3 *db = pParse->db;  /* The database connection */
-  int iDb;                /* The database to store the trigger in */
+  int iDb;            /* Only MAIN or TEMP db exists -> iDb = 0 || iDb = 1 */
+
   Token *pName;           /* The unqualified db name */
   DbFixer sFix;           /* State vector for the DB fixer */
 
@@ -106,21 +68,14 @@ void sqlite3BeginTrigger(
   assert( pName2!=0 );
   assert( op==TK_INSERT || op==TK_UPDATE || op==TK_DELETE );
   assert( op>0 && op<0xff );
-  if( isTemp ){
-    /* If TEMP was specified, then the trigger name may not be qualified. */
-    if( pName2->n>0 ){
-      sqlite3ErrorMsg(pParse, "temporary trigger may not have qualified name");
-      goto trigger_cleanup;
-    }
-    iDb = 1;
-    pName = pName1;
-  }else{
-    /* Figure out the db that the trigger will be created in */
-    iDb = sqlite3TwoPartName(pParse, pName1, pName2, &pName);
-    if( iDb<0 ){
-      goto trigger_cleanup;
-    }
-  }
+
+  /* Check that we are in MAIN or TEMP  database */
+  iDb = sqlite3TwoPartName(pParse, pName1, pName2, &pName);
+  if ( iDb!=0 && iDb!=1 ) {
+    sqlite3ErrorMsg(pParse, "database is not MAIN or TEMP");
+    goto trigger_cleanup;
+  }    
+
   if( !pTableName || db->mallocFailed ){
     goto trigger_cleanup;
   }
@@ -138,17 +93,6 @@ void sqlite3BeginTrigger(
     pTableName->a[0].zDatabase = 0;
   }
 
-  /* If the trigger name was unqualified, and the table is a temp table,
-  ** then set iDb to 1 to create the trigger in the temporary database.
-  ** If sqlite3SrcListLookup() returns 0, indicating the table does not
-  ** exist, the error is caught by the block below.
-  */
-  pTab = sqlite3SrcListLookup(pParse, pTableName);
-  if( db->init.busy==0 && pName2->n==0 && pTab
-        && pTab->pSchema==db->aDb[1].pSchema ){
-    iDb = 1;
-  }
-
   /* Ensure the table name matches database name and that the table exists */
   if( db->mallocFailed ) goto trigger_cleanup;
   assert( pTableName->nSrc==1 );
@@ -159,17 +103,6 @@ void sqlite3BeginTrigger(
   pTab = sqlite3SrcListLookup(pParse, pTableName);
   if( !pTab ){
     /* The table does not exist. */
-    if( db->init.iDb==1 ){
-      /* Ticket #3810.
-      ** Normally, whenever a table is dropped, all associated triggers are
-      ** dropped too.  But if a TEMP trigger is created on a non-TEMP table
-      ** and the table is dropped by a different database connection, the
-      ** trigger is not visible to the database connection that does the
-      ** drop so the trigger cannot be dropped.  This results in an
-      ** "orphaned trigger" - a trigger whose associated table is missing.
-      */
-      db->init.orphanTrigger = 1;
-    }
     goto trigger_cleanup;
   }
   if( IsVirtual(pTab) ){
@@ -217,10 +150,13 @@ void sqlite3BeginTrigger(
 #ifndef SQLITE_OMIT_AUTHORIZATION
   {
     int iTabDb = sqlite3SchemaToIndex(db, pTab->pSchema);
+    if ( iTabDb!=0 && iTabDb!=1 ) {
+      sqlite3ErrorMsg(pParse, "database is not MAIN or TEMP");
+      goto trigger_cleanup;
+    }      
     int code = SQLITE_CREATE_TRIGGER;
     const char *zDb = db->aDb[iTabDb].zDbSName;
-    const char *zDbTrig = isTemp ? db->aDb[1].zDbSName : zDb;
-    if( iTabDb==1 || isTemp ) code = SQLITE_CREATE_TEMP_TRIGGER;
+    const char *zDbTrig = zDb;
     if( sqlite3AuthCheck(pParse, code, zName, pTab->zName, zDbTrig) ){
       goto trigger_cleanup;
     }
@@ -281,13 +217,17 @@ void sqlite3FinishTrigger(
   char *zOpts;                            /* MsgPack containing SQL options */
   sqlite3 *db = pParse->db;               /* The database */
   DbFixer sFix;                           /* Fixer object */
-  int iDb;                                /* Database containing the trigger */
+  int iDb;                            /* Database containing the trigger */
   Token nameToken;                        /* Trigger name for error reporting */
 
   pParse->pNewTrigger = 0;
   if( NEVER(pParse->nErr) || !pTrig ) goto triggerfinish_cleanup;
   zName = pTrig->zName;
   iDb = sqlite3SchemaToIndex(pParse->db, pTrig->pSchema);
+  if ( iDb!=0 && iDb!=1 ) {
+    sqlite3ErrorMsg(pParse, "database is not MAIN or TEMP");
+    goto triggerfinish_cleanup;
+  }
   pTrig->step_list = pStepList;
   while( pStepList ){
     pStepList->pTrig = pTrig;
@@ -563,7 +503,7 @@ void sqlite3DropTrigger(Parse *pParse, SrcList *pName, int noErr){
     int j = (i<2) ? i^1 : i;  /* Search TEMP before MAIN */
     if( zDb && sqlite3StrICmp(db->aDb[j].zDbSName, zDb) ) continue;
     assert( sqlite3SchemaMutexHeld(db, j, 0) );
-    pTrigger = sqlite3HashFind(&(db->aDb[j].pSchema->trigHash), zName);
+    pTrigger = sqlite3HashFind(&(db->aDb[0].pSchema->trigHash), zName);
     if( pTrigger ) break;
   }
   if( !pTrigger ){
@@ -688,7 +628,7 @@ Trigger *sqlite3TriggersExist(
   Trigger *p;
 
   if( (pParse->db->flags & SQLITE_EnableTrigger)!=0 ){
-    pList = sqlite3TriggerList(pParse, pTab);
+    pList = pTab->pTrigger;
   }
   assert( pList==0 || IsVirtual(pTab)==0 );
   for(p=pList; p; p=p->pNext){

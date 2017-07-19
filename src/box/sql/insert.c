@@ -1949,7 +1949,7 @@ static int xferOptimization(
     ** error if pSelect reads from a CTE named "xxx".  */
     return 0;
   }
-  if( sqlite3TriggerList(pParse, pDest) ){
+  if( pDest->pTrigger ){
     return 0;   /* tab1 must not have triggers */
   }
 #ifndef SQLITE_OMIT_VIRTUALTABLE

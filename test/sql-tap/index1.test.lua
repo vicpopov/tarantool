@@ -1238,7 +1238,7 @@ if (0 > 0)
     test:do_catchsql_test(
         "index-21.2",
         [[
-            CREATE TEMP TABLE t6(x primary key);
+            CREATE TABLE t6(x primary key);
             INSERT INTO temp.t6 values(1),(5),(9);
             CREATE INDEX temp.i21 ON t6(x);
             SELECT x FROM t6 ORDER BY x DESC;

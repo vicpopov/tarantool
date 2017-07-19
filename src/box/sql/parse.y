@@ -146,8 +146,8 @@ cmd ::= ROLLBACK trans_opt TO savepoint_opt nm(X). {
 ///////////////////// The CREATE TABLE statement ////////////////////////////
 //
 cmd ::= create_table create_table_args.
-create_table ::= createkw temp(T) TABLE ifnotexists(E) nm(Y) dbnm(Z). {
-   sqlite3StartTable(pParse,&Y,&Z,T,0,0,E);
+create_table ::= createkw TABLE ifnotexists(E) nm(Y) dbnm(Z). {
+   sqlite3StartTable(pParse,&Y,&Z,0,0,0,E);
 }
 createkw(A) ::= CREATE(A).  {disableLookaside(pParse);}
 
@@ -1360,10 +1360,10 @@ cmd ::= createkw trigger_decl(A) BEGIN trigger_cmd_list(S) END(Z). {
   sqlite3FinishTrigger(pParse, S, &all);
 }
 
-trigger_decl(A) ::= temp(T) TRIGGER ifnotexists(NOERR) nm(B) dbnm(Z) 
+trigger_decl(A) ::= TRIGGER ifnotexists(NOERR) nm(B) dbnm(Z) 
                     trigger_time(C) trigger_event(D)
                     ON fullname(E) foreach_clause when_clause(G). {
-  sqlite3BeginTrigger(pParse, &B, &Z, C, D.a, D.b, E, G, T, NOERR);
+  sqlite3BeginTrigger(pParse, &B, &Z, C, D.a, D.b, E, G, NOERR);
   A = (Z.n==0?B:Z); /*A-overwrites-T*/
 }
 

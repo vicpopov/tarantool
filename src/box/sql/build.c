@@ -2572,7 +2572,7 @@ void sqlite3CodeDropTable(Parse *pParse, Table *pTab, int iDb, int isView){
   ** is generated to remove entries from sqlite_master and/or
   ** sqlite_temp_master if required.
   */
-  pTrigger = sqlite3TriggerList(pParse, pTab);
+  pTrigger = pTab->pTrigger;
   while( pTrigger ){
     assert( pTrigger->pSchema==pTab->pSchema || 
         pTrigger->pSchema==db->aDb[1].pSchema );

@@ -50,12 +50,12 @@ test:do_catchsql_test(
 test:do_catchsql_test(
     "trigger1-1.1.2",
     [[
-        CREATE TEMP TRIGGER trig UPDATE ON no_such_table BEGIN
+        CREATE TRIGGER trig UPDATE ON no_such_table BEGIN
           SELECT * from sqlite_master;
         END;
     ]], {
         -- <trigger1-1.1.2>
-        1, "no such table: no_such_table"
+        1, "no such table: main.no_such_table"
         -- </trigger1-1.1.2>
     })
 

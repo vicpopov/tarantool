@@ -372,6 +372,7 @@ local function load_cfg(cfg)
     if not box.cfg.read_only then
         box.schema.upgrade{auto = true}
     end
+    box.internal.schema.init()
 end
 box.cfg = load_cfg
 

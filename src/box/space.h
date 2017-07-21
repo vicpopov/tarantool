@@ -39,6 +39,7 @@ extern "C" {
 
 struct Index;
 struct Handler;
+struct sequence;
 
 struct space {
 	struct access access[BOX_USER_MAX];
@@ -82,7 +83,8 @@ struct space {
 	uint64_t truncate_count;
 	/** Enable/disable triggers. */
 	bool run_triggers;
-
+	/** Sequence defined for this space or NULL. */
+	struct sequence *sequence;
 	/** Default tuple format used by this space */
 	struct tuple_format *format;
 	/**

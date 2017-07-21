@@ -310,6 +310,17 @@ schema_init()
 	index_def->space_id = BOX_CLUSTER_ID;
 	(void) sc_space_new(BOX_CLUSTER_ID, "_cluster", index_def,
 			    &on_replace_cluster, NULL);
+
+	/** _sequence - definition of all sequence objects. */
+	index_def->space_id = BOX_SEQUENCE_ID;
+	(void) sc_space_new(BOX_SEQUENCE_ID, "_sequence", index_def,
+			    &on_replace_sequence, NULL);
+
+	/** _sequence_data - current sequence value. */
+	index_def->space_id = BOX_SEQUENCE_DATA_ID;
+	(void) sc_space_new(BOX_SEQUENCE_DATA_ID, "_sequence_data", index_def,
+			    &on_replace_sequence_data, NULL);
+
 	index_def_delete(index_def);
 	index_def_guard1.is_active = false;
 

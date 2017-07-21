@@ -1,7 +1,5 @@
-#ifndef INCLUDES_TARANTOOL_BOX_ALTER_H
-#define INCLUDES_TARANTOOL_BOX_ALTER_H
 /*
- * Copyright 2010-2016, Tarantool AUTHORS, please see AUTHORS file.
+ * Copyright 2010-2017, Tarantool AUTHORS, please see AUTHORS file.
  *
  * Redistribution and use in source and binary forms, with or
  * without modification, are permitted provided that the following
@@ -30,19 +28,49 @@
  * THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-#include "trigger.h"
+#include "box/lua/sequence.h"
+#include "lua/utils.h"
+#include "box/box.h"
 
-extern struct trigger alter_space_on_replace_space;
-extern struct trigger alter_space_on_replace_index;
-extern struct trigger on_replace_truncate;
-extern struct trigger on_replace_schema;
-extern struct trigger on_replace_user;
-extern struct trigger on_replace_func;
-extern struct trigger on_replace_priv;
-extern struct trigger on_replace_cluster;
-extern struct trigger on_replace_sequence;
-extern struct trigger on_replace_sequence_data;
-extern struct trigger on_stmt_begin_space;
-extern struct trigger on_stmt_begin_index;
+static int
+lbox_sequence_next(struct lua_State *L)
+{
+	uint32_t seq_id = luaL_checkinteger(L, 1);
+	int64_t result;
+	if (box_sequence_next(seq_id, &result) != 0)
+		luaT_error(L);
+	luaL_pushint64(L, result);
+	return 1;
+}
 
-#endif /* INCLUDES_TARANTOOL_BOX_ALTER_H */
+static int
+lbox_sequence_set(struct lua_State *L)
+{
+	uint32_t seq_id = luaL_checkinteger(L, 1);
+	int64_t value = luaL_checkint64(L, 2);
+	if (box_sequence_set(seq_id, value) != 0)
+		luaT_error(L);
+	return 0;
+}
+
+static int
+lbox_sequence_reset(struct lua_State *L)
+{
+	uint32_t seq_id = luaL_checkinteger(L, 1);
+	if (box_sequence_reset(seq_id) != 0)
+		luaT_error(L);
+	return 0;
+}
+
+void
+box_lua_sequence_init(struct lua_State *L)
+{
+	static const struct luaL_Reg sequence_internal_lib[] = {
+		{"next", lbox_sequence_next},
+		{"set", lbox_sequence_set},
+		{"reset", lbox_sequence_reset},
+		{NULL, NULL}
+	};
+	luaL_register(L, "box.internal.sequence", sequence_internal_lib);
+	lua_pop(L, 1);
+}

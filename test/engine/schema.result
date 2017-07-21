@@ -22,12 +22,12 @@ t = {} for k,v in pairs(box.space.tweedledum) do if type(v) ~= 'table' and type(
 ...
 t
 ---
-- - 'temporary: false'
-  - 'id: 0'
+- - 'id: 0'
+  - 'field_count: 0'
   - 'engine: engine'
   - 'enabled: true'
   - 'name: tweedledum'
-  - 'field_count: 0'
+  - 'temporary: false'
 ...
 space:drop()
 ---

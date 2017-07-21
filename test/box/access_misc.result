@@ -651,6 +651,12 @@ box.space._space:select()
         'type': 'str'}]]
   - [330, 1, '_truncate', 'memtx', 0, {}, [{'name': 'id', 'type': 'num'}, {'name': 'count',
         'type': 'num'}]]
+  - [340, 1, '_sequence', 'memtx', 0, {}, [{'name': 'id', 'type': 'num'}, {'name': 'owner',
+        'type': 'num'}, {'name': 'name', 'type': 'str'}, {'name': 'step', 'type': 'num'},
+      {'name': 'min', 'type': 'num'}, {'name': 'max', 'type': 'num'}, {'name': 'start',
+        'type': 'num'}, {'name': 'cycle', 'type': 'bool'}]]
+  - [341, 1, '_sequence_data', 'memtx', 0, {}, [{'name': 'id', 'type': 'num'}, {'name': 'value',
+        'type': 'num'}]]
 ...
 box.space._func:select()
 ---

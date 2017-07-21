@@ -63,6 +63,7 @@ add_library(box STATIC
     vy_log.c
     vy_upsert.c
     space.cc
+    sequence.c
     func.cc
     alter.cc
     schema.cc
@@ -93,6 +94,7 @@ add_library(box STATIC
     lua/slab.c
     lua/index.c
     lua/space.cc
+    lua/sequence.c
     lua/misc.cc
     lua/info.c
     lua/stat.c

@@ -190,6 +190,12 @@ struct errcode_record {
 	/*135 */_(ER_VY_QUOTA_TIMEOUT,		"Timed out waiting for Vinyl memory quota") \
 	/*136 */_(ER_PARTIAL_KEY,		"%s index  does not support selects via a partial key (expected %u parts, got %u). Please Consider changing index type to TREE.") \
 	/*137 */_(ER_TRUNCATE_SYSTEM_SPACE,	"Can't truncate a system space, space '%s'") \
+	/*138 */_(ER_CREATE_SEQUENCE,		"Failed to create sequence '%s': %s") \
+	/*139 */_(ER_ALTER_SEQUENCE,		"Can't modify sequence '%s': %s") \
+	/*140 */_(ER_DROP_SEQUENCE,		"Can't drop sequence '%s': %s") \
+	/*141 */_(ER_NO_SUCH_SEQUENCE,		"Sequence '%s' does not exist") \
+	/*142 */_(ER_SEQUENCE_EXISTS,		"Sequence '%s' already exists") \
+	/*143 */_(ER_SEQUENCE_OVERFLOW,		"Sequence '%s' overflowed") \
 
 /*
  * !IMPORTANT! Please follow instructions at start of the file

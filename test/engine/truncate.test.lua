@@ -9,9 +9,8 @@ fiber =  require('fiber')
 s = box.schema.create_space('test', {engine = engine})
 _ = s:create_index('pk')
 _ = s:insert{123}
-box.begin()
-s:truncate()
-box.commit()
+box.begin() s:truncate() box.commit()
+box.rollback()
 s:select()
 s:drop()
 

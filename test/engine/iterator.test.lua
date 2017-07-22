@@ -311,10 +311,13 @@ i2 = s:create_index('i2', { type = 'tree', parts = {2,'unsigned'}, unique = true
 
 _ = s:replace{2, 2}
 
+-- upsert fails in unique secondary
+inspector:cmd("setopt delimiter ';'")
 box.begin()
-_ = s:replace{1, 1}
-_ = pcall(s.upsert, s, {1, 1}, {{"+", 2, 1}}) -- failed in unique secondary
+s:replace{1, 1}
+pcall(s.upsert, s, {1, 1}, {{"+", 2, 1}})
 box.commit()
+inspector:cmd("setopt delimiter ''");
 
 s:select{}
 s:drop{}

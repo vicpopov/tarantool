@@ -71,7 +71,7 @@ static void *memtx_index_reserved_extents;
 static void
 txn_on_yield_or_stop(struct trigger * /* trigger */, void * /* event */)
 {
-	txn_rollback(); /* doesn't throw */
+	txn_abort(); /* doesn't throw */
 }
 
 static void

@@ -93,6 +93,7 @@ box.begin() s:insert{1, 'Must be rolled back'};
 while s:get{1} ~= nil do fiber.sleep(0) end
 -- nothing to commit because of yield
 box.commit();
+box.rollback();
 -- Test background fiber
 --
 function sloppy()

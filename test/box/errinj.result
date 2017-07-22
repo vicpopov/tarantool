@@ -397,12 +397,12 @@ box.commit();
 ---
 - error: Failed to allocate 18 bytes in slab allocator for memtx_tuple
 ...
+box.rollback();
+---
+...
 s:select{};
 ---
 - []
-...
-box.rollback();
----
 ...
 box.begin()
     pcall(s.insert, s, {1})
@@ -411,12 +411,12 @@ box.commit();
 ---
 - error: Failed to allocate 18 bytes in slab allocator for memtx_tuple
 ...
+box.rollback();
+---
+...
 s:select{};
 ---
 - []
-...
-box.rollback();
----
 ...
 errinj.set("ERRINJ_TUPLE_ALLOC", false);
 ---
@@ -430,16 +430,12 @@ box.commit();
 ---
 - error: Failed to allocate 18 bytes in slab allocator for memtx_tuple
 ...
+box.rollback();
+---
+...
 errinj.set("ERRINJ_TUPLE_ALLOC", false);
 ---
 - ok
-...
-s:select{};
----
-- []
-...
-box.rollback();
----
 ...
 s:select{};
 ---
@@ -455,9 +451,6 @@ box.commit();
 s:select{};
 ---
 - - [1]
-...
-box.rollback();
----
 ...
 test_run:cmd("setopt delimiter ''");
 ---

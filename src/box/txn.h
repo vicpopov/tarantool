@@ -86,6 +86,8 @@ struct txn {
 	 * (statement end causes an automatic transaction commit).
 	 */
 	bool is_autocommit;
+	/** Set if this transaction was aborted. */
+	bool is_aborted;
 	/** True if on_commit and on_rollback lists are non-empty. */
 	bool has_triggers;
 	/** The number of active nested statement-level transactions. */
@@ -128,6 +130,23 @@ txn_commit(struct txn *txn);
 /** Rollback a transaction, if any. */
 void
 txn_rollback();
+
+/**
+ * Abort a transaction, if any.
+ *
+ * This function rolls back the current transaction,
+ * but doesn't clear FIBER_KEY_TXN. Any attempt to
+ * use it will raise ER_TRANSACTION_CONFLICT error.
+ */
+void
+txn_abort();
+
+static inline void
+txn_check_aborted(struct txn *txn)
+{
+	if (txn->is_aborted)
+		tnt_raise(ClientError, ER_TRANSACTION_CONFLICT);
+}
 
 /**
  * Most txns don't have triggers, and txn objects
@@ -180,6 +199,7 @@ txn_begin_ro_stmt(struct space *space)
 {
 	struct txn *txn = in_txn();
 	if (txn) {
+		txn_check_aborted(txn);
 		Engine *engine = space->handler->engine;
 		txn_begin_in_engine(engine, txn);
 	}
@@ -192,6 +212,7 @@ txn_commit_ro_stmt(struct txn *txn)
 	assert(txn == in_txn());
 	if (txn) {
 		assert(txn->engine);
+		assert(!txn->is_aborted);
 		/* nothing to do */
 	} else {
 		fiber_gc();

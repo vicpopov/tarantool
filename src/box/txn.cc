@@ -100,6 +100,7 @@ txn_begin(bool is_autocommit)
 	stailq_create(&txn->stmts);
 	txn->n_rows = 0;
 	txn->is_autocommit = is_autocommit;
+	txn->is_aborted = false;
 	txn->has_triggers  = false;
 	txn->in_sub_stmt = 0;
 	txn->signature = -1;
@@ -135,6 +136,8 @@ txn_begin_stmt(struct space *space)
 	else if (txn->in_sub_stmt > TXN_SUB_STMT_MAX)
 		tnt_raise(ClientError, ER_SUB_STMT_MAX);
 
+	txn_check_aborted(txn);
+
 	trigger_run(&space->on_stmt_begin, txn);
 	Engine *engine = space->handler->engine;
 	txn_begin_in_engine(engine, txn);
@@ -152,6 +155,7 @@ txn_begin_stmt(struct space *space)
 void
 txn_commit_stmt(struct txn *txn, struct request *request)
 {
+	assert(!txn->is_aborted);
 	assert(txn->in_sub_stmt > 0);
 	/*
 	 * Run on_replace triggers. For now, disallow mutation
@@ -232,6 +236,8 @@ txn_commit(struct txn *txn)
 
 	assert(stailq_empty(&txn->stmts) || txn->engine);
 
+	txn_check_aborted(txn);
+
 	/* Do transaction conflict resolving */
 	if (txn->engine) {
 		txn->engine->prepare(txn);
@@ -281,20 +287,39 @@ txn_rollback_stmt()
 	--txn->in_sub_stmt;
 }
 
+static void
+txn_do_rollback(struct txn *txn)
+{
+	assert(txn == in_txn());
+
+	if (txn->has_triggers)
+		trigger_run(&txn->on_rollback, txn); /* must not throw. */
+	if (txn->engine)
+		txn->engine->rollback(txn);
+}
+
 void
 txn_rollback()
 {
 	struct txn *txn = in_txn();
 	if (txn == NULL)
 		return;
-	if (txn->has_triggers)
-		trigger_run(&txn->on_rollback, txn); /* must not throw. */
-	if (txn->engine)
-		txn->engine->rollback(txn);
+	if (!txn->is_aborted)
+		txn_do_rollback(txn);
 	TRASH(txn);
 	/** Free volatile txn memory. */
 	fiber_gc();
 	fiber_set_txn(fiber(), NULL);
+}
+
+void
+txn_abort()
+{
+	struct txn *txn = in_txn();
+	if (txn == NULL || txn->is_aborted)
+		return;
+	txn_do_rollback(txn);
+	txn->is_aborted = true;
 }
 
 void

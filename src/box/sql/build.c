@@ -3306,6 +3306,10 @@ void sqlite3CreateIndex(
   pIndex->idxType = idxType;
   pIndex->pSchema = db->aDb[iDb].pSchema;
   pIndex->nKeyCol = pList->nExpr;
+  if (StoredInTarantool(pTab)){
+    /* Tarantool have access to each column by any index */
+    pIndex->isCovering = 1;
+  }
   if( pPIWhere ){
     sqlite3ResolveSelfReference(pParse, pTab, NC_PartIdx, pPIWhere, 0);
     pIndex->pPartIdxWhere = pPIWhere;
@@ -3578,21 +3582,35 @@ void sqlite3CreateIndex(
   ** processing (in sqlite3GenerateConstraintChecks()) as part of
   ** UPDATE and INSERT statements.  
   */
-  if( db->init.busy || pTblName==0 ){
-    if( onError!=OE_Replace || pTab->pIndex==0
-         || pTab->pIndex->onError==OE_Replace){
+
+  if( !(db->init.busy || pTblName==0) ) goto exit_create_index;
+
+  if (IsPrimaryKeyIndex(pIndex)){
+    assert(sqlite3PrimaryKeyIndex(pTab) == NULL);
+    pIndex->pNext = pTab->pIndex;
+    pTab->pIndex = pIndex;
+    pIndex = 0;
+    goto exit_create_index;
+  }
+  if( onError!=OE_Replace || pTab->pIndex==0
+      || pTab->pIndex->onError==OE_Replace){
+    Index *pk = sqlite3PrimaryKeyIndex(pTab);
+    if (pk){
+      pIndex->pNext = pk->pNext;
+      pk->pNext=pIndex;
+    }else {
       pIndex->pNext = pTab->pIndex;
       pTab->pIndex = pIndex;
-    }else{
-      Index *pOther = pTab->pIndex;
-      while( pOther->pNext && pOther->pNext->onError!=OE_Replace ){
-        pOther = pOther->pNext;
-      }
-      pIndex->pNext = pOther->pNext;
-      pOther->pNext = pIndex;
     }
-    pIndex = 0;
+  }else{
+    Index *pOther = pTab->pIndex;
+    while( pOther->pNext && pOther->pNext->onError!=OE_Replace ){
+      pOther = pOther->pNext;
+    }
+    pIndex->pNext = pOther->pNext;
+    pOther->pNext = pIndex;
   }
+  pIndex = 0;
 
   /* Clean up before exiting */
 exit_create_index:

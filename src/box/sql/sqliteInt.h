@@ -1869,7 +1869,8 @@ struct Table {
 #  define IsOrdinaryHiddenColumn(X) 0
 #endif
 
-
+/* This short macro returns true if pTable belongs to tarantool */
+#define StoredInTarantool(X)     (!HasRowid(X))
 /* Does the table have a rowid */
 #define HasRowid(X)     (((X)->tabFlags & TF_WithoutRowid)==0)
 #define VisibleRowid(X) (((X)->tabFlags & TF_NoVisibleRowid)==0)

@@ -1903,34 +1903,32 @@ sqlite3CompleteInsertion(Parse * pParse,	/* The parser context */
 	v = sqlite3GetVdbe(pParse);
 	assert(v != 0);
 	assert(pTab->pSelect == 0);	/* This table is not a VIEW */
-	for (i = 0, pIdx = pTab->pIndex; pIdx; pIdx = pIdx->pNext, i++) {
-		if (aRegIdx[i] == 0)
-			continue;
-		bAffinityDone = 1;
-		if (pIdx->pPartIdxWhere) {
-			sqlite3VdbeAddOp2(v, OP_IsNull, aRegIdx[i],
-					  sqlite3VdbeCurrentAddr(v) + 2);
-			VdbeCoverage(v);
-		}
-		pik_flags = 0;
-		if (useSeekResult)
-			pik_flags = OPFLAG_USESEEKRESULT;
-		if (IsPrimaryKeyIndex(pIdx) && !HasRowid(pTab)) {
-			assert(pParse->nested == 0);
-			pik_flags |= OPFLAG_NCHANGE;
-			sqlite3VdbeAddOp4Int(v, OP_IdxInsert, iIdxCur + i,
-					     aRegIdx[i], aRegIdx[i] + 1,
-					     pIdx->
-					     uniqNotNull ? pIdx->nKeyCol :
-					     pIdx->nColumn);
-			sqlite3VdbeChangeP5(v, pik_flags);
-		} else {
-			/* kyukhin: do not update indices for Tarantool. This is done automatically.  */
-			/*
-			   sqlite3VdbeAddOp4Int(v, OP_IdxInsert, iIdxCur+i, aRegIdx[i],
-			   aRegIdx[i]+1,
-			   pIdx->uniqNotNull ? pIdx->nKeyCol: pIdx->nColumn); */
-		}
+	/*
+	 * The for loop which purpose in sqlite was to insert new values to \
+	 * all indexes replaced to inserting new values only to pk in tarantool
+	 */
+	pIdx = pTab->pIndex;
+	/* Each table have pk on top of the indexes list */
+	assert(IsPrimaryKeyIndex(pIdx));
+	bAffinityDone = 1;
+	/* Partial indexes should be implemented somewhere in tarantool
+	 * codebase to check it during inserting values to the pk #2626
+	 *
+	 */
+	/*if( pIdx->pPartIdxWhere ){
+	 *  sqlite3VdbeAddOp2(v, OP_IsNull, aRegIdx[i], sqlite3VdbeCurrentAddr(v)+2);
+	 *  VdbeCoverage(v);
+	 *}
+	 */
+	pik_flags = 0;
+	if( useSeekResult ) pik_flags = OPFLAG_USESEEKRESULT;
+	if( IsPrimaryKeyIndex(pIdx) && !HasRowid(pTab) ){
+		assert( pParse->nested==0 );
+		pik_flags |= OPFLAG_NCHANGE;
+		sqlite3VdbeAddOp4Int(v, OP_IdxInsert, iIdxCur, aRegIdx[0],
+		                     aRegIdx[0]+1,
+		                     pIdx->uniqNotNull ? pIdx->nKeyCol: pIdx->nColumn);
+		sqlite3VdbeChangeP5(v, pik_flags);
 	}
 	if (!HasRowid(pTab))
 		return;

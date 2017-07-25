@@ -57,13 +57,13 @@ int sqlite3InitCallback(void *pInit, int argc, char **argv, char **NotUsed){
   assert( argc==3 );
   UNUSED_PARAMETER2(NotUsed, argc);
   assert( sqlite3_mutex_held(db->mutex) );
-  DbClearProperty(db, iDb, DB_Empty);
+  DbClearProperty(db, DB_Empty);
   if( db->mallocFailed ){
     corruptSchema(pData, argv[0], 0);
     return 1;
   }
 
-  assert( iDb>=0 && iDb<db->nDb );
+  assert( iDb==0 );
   if( argv==0 ) return 0;   /* Might happen if EMPTY_RESULT_CALLBACKS are on */
   if( argv[1]==0 ){
     corruptSchema(pData, argv[0], 0);
@@ -112,7 +112,7 @@ int sqlite3InitCallback(void *pInit, int argc, char **argv, char **NotUsed){
     ** to do here is record the root page number for that index.
     */
     Index *pIndex;
-    pIndex = sqlite3FindIndex(db, argv[0], db->aDb[iDb].zDbSName);
+    pIndex = sqlite3FindIndex(db, argv[0]);
     if( pIndex==0 ){
       /* This can occur if there exists an index on a TEMP table which
       ** has the same name as another index on a permanent index.  Since
@@ -135,7 +135,7 @@ int sqlite3InitCallback(void *pInit, int argc, char **argv, char **NotUsed){
 ** auxiliary databases.  Return one of the SQLITE_ error codes to
 ** indicate success or failure.
 */
-extern int sqlite3InitOne(sqlite3 *db, int iDb, char **pzErrMsg){
+extern int sqlite3InitDatabase(sqlite3 *db, char **pzErrMsg){
   int rc;
   int i;
 #ifndef SQLITE_OMIT_DEPRECATED
@@ -147,24 +147,24 @@ extern int sqlite3InitOne(sqlite3 *db, int iDb, char **pzErrMsg){
   InitData initData;
   const char *zMasterName;
   int openedTransaction = 0;
+  int iDb = 0;
 
-  assert( iDb>=0 && iDb<db->nDb );
-  assert( db->aDb[iDb].pSchema );
+  assert( db->mdb.pSchema );
   assert( sqlite3_mutex_held(db->mutex) );
-  assert( iDb==1 || sqlite3BtreeHoldsMutex(db->aDb[iDb].pBt) );
+  assert( sqlite3BtreeHoldsMutex(db->mdb.pBt) );
 
   /* Construct the in-memory representation schema tables (sqlite_master or
   ** sqlite_temp_master) by invoking the parser directly.  The appropriate
   ** table name will be inserted automatically by the parser so we can just
   ** use the abbreviation "x" here.  The parser will also automatically tag
   ** the schema table as read-only. */
-  azArg[0] = zMasterName = SCHEMA_TABLE(iDb);
+  azArg[0] = zMasterName = MASTER_NAME;
   azArg[1] = "1";
   azArg[2] = "CREATE TABLE x(type text,name text,tbl_name text,"
                             "rootpage integer,sql text)";
   azArg[3] = 0;
   initData.db = db;
-  initData.iDb = iDb;
+  initData.iDb = 0;
   initData.rc = SQLITE_OK;
   initData.pzErrMsg = pzErrMsg;
   sqlite3InitCallback(&initData, 3, (char **)azArg, 0);
@@ -181,11 +181,8 @@ extern int sqlite3InitOne(sqlite3 *db, int iDb, char **pzErrMsg){
 
   /* Create a cursor to hold the database open
   */
-  pDb = &db->aDb[iDb];
+  pDb = &db->mdb;
   if( pDb->pBt==0 ){
-    if( !OMIT_TEMPDB && ALWAYS(iDb==1) ){
-      DbSetProperty(db, 1, DB_SchemaLoaded);
-    }
     return SQLITE_OK;
   }
 
@@ -230,27 +227,9 @@ extern int sqlite3InitOne(sqlite3 *db, int iDb, char **pzErrMsg){
   ** as sqlite3.enc.
   */
   if( meta[BTREE_TEXT_ENCODING-1] ){  /* text encoding */
-    if( iDb==0 ){
-#ifndef SQLITE_OMIT_UTF16
-      u8 encoding;
-      /* If opening the main database, set ENC(db). */
-      encoding = (u8)meta[BTREE_TEXT_ENCODING-1] & 3;
-      if( encoding==0 ) encoding = SQLITE_UTF8;
-      ENC(db) = encoding;
-#else
-      ENC(db) = SQLITE_UTF8;
-#endif
-    }else{
-      /* If opening an attached database, the encoding much match ENC(db) */
-      if( meta[BTREE_TEXT_ENCODING-1]!=ENC(db) ){
-        sqlite3SetString(pzErrMsg, db, "attached databases must use the same"
-            " text encoding as main database");
-        rc = SQLITE_ERROR;
-        goto initone_error_out;
-      }
-    }
+    ENC(db) = SQLITE_UTF8;
   }else{
-    DbSetProperty(db, iDb, DB_Empty);
+    DbSetProperty(db, DB_Empty);
   }
   pDb->pSchema->enc = ENC(db);
 
@@ -286,7 +265,7 @@ extern int sqlite3InitOne(sqlite3 *db, int iDb, char **pzErrMsg){
   ** not downgrade the database and thus invalidate any descending
   ** indices that the user might have created.
   */
-  if( iDb==0 && meta[BTREE_FILE_FORMAT-1]>=4 ){
+  if( meta[BTREE_FILE_FORMAT-1]>=4 ){
     db->flags &= ~SQLITE_LegacyFileFmt;
   }
 
@@ -296,8 +275,8 @@ extern int sqlite3InitOne(sqlite3 *db, int iDb, char **pzErrMsg){
   {
     char *zSql;
     zSql = sqlite3MPrintf(db, 
-        "SELECT name, rootpage, sql FROM \"%w\".%s ORDER BY rowid",
-        db->aDb[iDb].zDbSName, zMasterName);
+        "SELECT name, rootpage, sql FROM %s ORDER BY rowid",
+        zMasterName);
 #ifndef SQLITE_OMIT_AUTHORIZATION
     {
       sqlite3_xauth xAuth;
@@ -330,7 +309,7 @@ extern int sqlite3InitOne(sqlite3 *db, int iDb, char **pzErrMsg){
     ** purpose of this is to allow access to the sqlite_master table
     ** even when its contents have been corrupted.
     */
-    DbSetProperty(db, iDb, DB_SchemaLoaded);
+    DbSetProperty(db, DB_SchemaLoaded);
     rc = SQLITE_OK;
   }
 
@@ -352,46 +331,29 @@ error_out:
 }
 
 /*
-** Initialize all database files - the main database file, the file
-** used to store temporary tables, and any additional database files
-** created using ATTACH statements.  Return a success code.  If an
+** Initialize all database files - the main database file
+** Return a success code.  If an
 ** error occurs, write an error message into *pzErrMsg.
-**
 ** After a database is initialized, the DB_SchemaLoaded bit is set
 ** bit is set in the flags field of the Db structure. If the database
 ** file was of zero-length, then the DB_Empty flag is also set.
 */
 int sqlite3Init(sqlite3 *db, char **pzErrMsg){
-  int i, rc;
+  int rc;
   int commit_internal = !(db->flags&SQLITE_InternChanges);
   
   assert( sqlite3_mutex_held(db->mutex) );
-  assert( sqlite3BtreeHoldsMutex(db->aDb[0].pBt) );
+  assert( sqlite3BtreeHoldsMutex(db->mdb.pBt) );
   assert( db->init.busy==0 );
   rc = SQLITE_OK;
   db->init.busy = 1;
   ENC(db) = SCHEMA_ENC(db);
-  for(i=0; rc==SQLITE_OK && i<db->nDb; i++){
-    if( DbHasProperty(db, i, DB_SchemaLoaded) || i==1 ) continue;
-    rc = sqlite3InitOne(db, i, pzErrMsg);
-    if( rc ){
-      sqlite3ResetOneSchema(db, i);
+  if( !DbHasProperty(db, DB_SchemaLoaded)) {
+    rc = sqlite3InitDatabase(db, pzErrMsg);
+    if (rc) {
+      sqlite3ResetOneSchema(db, 0);
     }
   }
-
-  /* Once all the other databases have been initialized, load the schema
-  ** for the TEMP database. This is loaded last, as the TEMP database
-  ** schema may contain references to objects in other databases.
-  */
-#ifndef SQLITE_OMIT_TEMPDB
-  assert( db->nDb>1 );
-  if( rc==SQLITE_OK && !DbHasProperty(db, 1, DB_SchemaLoaded) ){
-    rc = sqlite3InitOne(db, 1, pzErrMsg);
-    if( rc ){
-      sqlite3ResetOneSchema(db, 1);
-    }
-  }
-#endif
 
   db->init.busy = 0;
   if( rc==SQLITE_OK && commit_internal ){
@@ -433,37 +395,34 @@ static void schemaIsValid(Parse *pParse){
 
   assert( pParse->checkSchema );
   assert( sqlite3_mutex_held(db->mutex) );
-  for(iDb=0; iDb<db->nDb; iDb++){
-    int openedTransaction = 0;         /* True if a transaction is opened */
-    Btree *pBt = db->aDb[iDb].pBt;     /* Btree database to read cookie from */
-    if( pBt==0 ) continue;
+  int openedTransaction = 0;         /* True if a transaction is opened */
+  Btree *pBt = db->mdb.pBt;     /* Btree database to read cookie from */
 
-    /* If there is not already a read-only (or read-write) transaction opened
-    ** on the b-tree database, open one now. If a transaction is opened, it 
-    ** will be closed immediately after reading the meta-value. */
-    if( !sqlite3BtreeIsInReadTrans(pBt) ){
-      rc = sqlite3BtreeBeginTrans(pBt, 0);
-      if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ){
-        sqlite3OomFault(db);
-      }
-      if( rc!=SQLITE_OK ) return;
-      openedTransaction = 1;
+  /* If there is not already a read-only (or read-write) transaction opened
+  ** on the b-tree database, open one now. If a transaction is opened, it
+  ** will be closed immediately after reading the meta-value. */
+  if( !sqlite3BtreeIsInReadTrans(pBt) ){
+    rc = sqlite3BtreeBeginTrans(pBt, 0);
+    if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ){
+      sqlite3OomFault(db);
     }
+    if( rc!=SQLITE_OK ) return;
+    openedTransaction = 1;
+  }
 
-    /* Read the schema cookie from the database. If it does not match the 
-    ** value stored as part of the in-memory schema representation,
-    ** set Parse.rc to SQLITE_SCHEMA. */
-    sqlite3BtreeGetMeta(pBt, BTREE_SCHEMA_VERSION, (u32 *)&cookie);
-    assert( sqlite3SchemaMutexHeld(db, iDb, 0) );
-    if( cookie!=db->aDb[iDb].pSchema->schema_cookie ){
-      sqlite3ResetOneSchema(db, iDb);
-      pParse->rc = SQLITE_SCHEMA;
-    }
+  /* Read the schema cookie from the database. If it does not match the
+  ** value stored as part of the in-memory schema representation,
+  ** set Parse.rc to SQLITE_SCHEMA. */
+  sqlite3BtreeGetMeta(pBt, BTREE_SCHEMA_VERSION, (u32 *)&cookie);
+  assert( sqlite3SchemaMutexHeld(db, 0) );
+  if( cookie!=db->mdb.pSchema->schema_cookie ){
+    sqlite3ResetOneSchema(db, iDb);
+    pParse->rc = SQLITE_SCHEMA;
+  }
 
-    /* Close the transaction, if one was opened. */
-    if( openedTransaction ){
-      sqlite3BtreeCommit(pBt);
-    }
+  /* Close the transaction, if one was opened. */
+  if( openedTransaction ){
+    sqlite3BtreeCommit(pBt);
   }
 }
 
@@ -489,12 +448,10 @@ int sqlite3SchemaToIndex(sqlite3 *db, Schema *pSchema){
   */
   assert( sqlite3_mutex_held(db->mutex) );
   if( pSchema ){
-    for(i=0; ALWAYS(i<db->nDb); i++){
-      if( db->aDb[i].pSchema==pSchema ){
-        break;
-      }
+    if( db->mdb.pSchema==pSchema ) {
+      i = 0;
     }
-    assert( i>=0 && i<db->nDb );
+    assert( i==0 );
   }
   return i;
 }
@@ -562,18 +519,15 @@ static int sqlite3Prepare(
   ** but it does *not* override schema lock detection, so this all still
   ** works even if READ_UNCOMMITTED is set.
   */
-  for(i=0; i<db->nDb; i++) {
-    Btree *pBt = db->aDb[i].pBt;
-    if( pBt ){
-      assert( sqlite3BtreeHoldsMutex(pBt) );
-      rc = sqlite3BtreeSchemaLocked(pBt);
-      if( rc ){
-        const char *zDb = db->aDb[i].zDbSName;
-        sqlite3ErrorWithMsg(db, rc, "database schema is locked: %s", zDb);
-        testcase( db->flags & SQLITE_ReadUncommitted );
-        goto end_prepare;
-      }
-    }
+  Btree *pBt = db->mdb.pBt;
+  assert( pBt );
+  assert( sqlite3BtreeHoldsMutex(pBt) );
+  rc = sqlite3BtreeSchemaLocked(pBt);
+  if( rc ){
+    const char *zDb = db->mdb.zDbSName;
+    sqlite3ErrorWithMsg(db, rc, "database schema is locked: %s", zDb);
+    testcase( db->flags & SQLITE_ReadUncommitted );
+    goto end_prepare;
   }
 
   sqlite3VtabUnlockList(db);

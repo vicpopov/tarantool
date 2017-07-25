@@ -1008,14 +1008,9 @@ int tarantoolSqlite3MakeIdxOpts(SqliteIndex *index, const char *zSql, void *buf)
 	(void)index;
 
 	p = enc->encode_map(base, 2);
-	/* gh-2187
-	 *
-	 * Include all index columns, i.e. "key" columns followed by the
-	 * primary key columns, in secondary indices. It means that all
-	 * indices created via SQL engine are unique.
-	 */
+	/* Mark as unique pk and unique indexes */
 	p = enc->encode_str(p, "unique", 6);
-	p = enc->encode_bool(p, 1);
+	p = enc->encode_bool(p, index->onError != OE_None);
 	p = enc->encode_str(p, "sql", 3);
 	p = enc->encode_str(p, zSql, zSql ? strlen(zSql) : 0);
 	return (int)(p - base);

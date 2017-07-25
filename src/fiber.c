@@ -868,6 +868,8 @@ fiber_destroy_all(struct cord *cord)
 						      struct fiber, link));
 }
 
+extern struct quota runtime_quota;
+
 void
 cord_create(struct cord *cord, const char *name)
 {
@@ -891,8 +893,8 @@ cord_create(struct cord *cord, const char *name)
 	region_create(&cord->sched.gc, &cord->slabc);
 	fiber_set_name(&cord->sched, "sched");
 	cord->fiber = &cord->sched;
-
 	cord->max_fid = 100;
+	quota_lessor_create(&cord->runtime_quota, &runtime_quota);
 	/*
 	 * No need to start this event since it's only used for
 	 * ev_feed_event(). Saves a few cycles on every

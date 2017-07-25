@@ -26,6 +26,14 @@
 
 /** \endcond public */
 
+/**
+ * Find malloc.h and malloc size getters.
+ */
+#cmakedefine HAVE_MALLOC_IN_DIR
+#cmakedefine HAVE_MALLOC_USABLE_SIZE
+#cmakedefine HAVE_MALLOC_SIZE
+#cmakedefine HAVE_MALLOC_QUOTA
+
 #define PACKAGE "@PACKAGE@"
 /*  Defined if building for Linux */
 #cmakedefine TARGET_OS_LINUX 1

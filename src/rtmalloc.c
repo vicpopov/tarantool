@@ -28,41 +28,74 @@
  * THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-#include "memory.h"
-#include "small/quota.h"
+
+#include "rtmalloc.h"
 #include "fiber.h"
+#include "diag.h"
 
-struct slab_arena runtime;
-struct quota runtime_quota;
+#ifdef HAVE_MALLOC_QUOTA
 
-/**
- * Global variable instead of expliticly QUOTA_MAX usage in
- * quota_init below allows to change the runtime_quota_total
- * before memory_init(). Needed for runtime quota tests.
- */
-size_t runtime_quota_total = QUOTA_MAX;
+extern struct quota runtime_quota;
 
-void
-memory_init()
+void *
+rtcalloc(size_t count, size_t size)
 {
-	const size_t SLAB_SIZE = 4 * 1024 * 1024;
-	/* default quota initialization */
-	quota_init(&runtime_quota, runtime_quota_total);
-
-	/* No limit on the runtime memory. */
-	slab_arena_create(&runtime, &runtime_quota, 0,
-			  SLAB_SIZE, MAP_PRIVATE);
+	void *ret = calloc(count, size);
+	if (ret == NULL)
+		goto error;
+	size_t real_size = malloc_usable_size(ret);
+	if (quota_lease(&cord()->runtime_quota, real_size) == 0)
+		return ret;
+	free(ret);
+error:
+	diag_set(OutOfMemory, size * count, "calloc", "ret");
+	return NULL;
 }
 
 void
-memory_free()
+rtfree(void *ptr)
 {
-	/*
-	 * If this is called from a fiber != sched, then
-	 * %rsp is pointing at the memory that we
-	 * would be trying to unmap. Don't.
-	 */
-#if 0
-	slab_arena_destroy(&runtime);
-#endif
+	size_t real_size = malloc_usable_size(ptr);
+	quota_end_lease(&cord()->runtime_quota, real_size);
+	free(ptr);
 }
+
+void *
+rtmalloc(size_t size)
+{
+	void *ret = malloc(size);
+	if (ret == NULL)
+		goto error;
+	size_t real_size = malloc_usable_size(ret);
+	if (quota_lease(&cord()->runtime_quota, real_size) == 0)
+		return ret;
+	free(ret);
+error:
+	diag_set(OutOfMemory, size, "malloc", "ret");
+	return NULL;
+}
+
+void *
+rtrealloc(void *ptr, size_t size)
+{
+	struct quota_lessor *q = &cord()->runtime_quota;
+	size_t old_size = malloc_usable_size(ptr);
+	if (old_size >= size)
+		return ptr;
+	void *new_ptr = malloc(size);
+	if (new_ptr == NULL)
+		goto error;
+	size_t new_size = malloc_usable_size(new_ptr);
+	assert(new_size >= old_size);
+	memcpy(new_ptr, ptr, old_size);
+	if (quota_lease(q, new_size - old_size) == 0) {
+		free(ptr);
+		return new_ptr;
+	}
+	free(new_ptr);
+error:
+	diag_set(OutOfMemory, size, "realloc", "ptr");
+	return NULL;
+}
+
+#endif /* HAVE_MALLOC_QUOTA */

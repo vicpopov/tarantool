@@ -42,6 +42,7 @@
 #include "small/mempool.h"
 #include "small/region.h"
 #include "small/rlist.h"
+#include "small/quota_lessor.h"
 #include "salad/stailq.h"
 
 #include <third_party/coro/coro.h>
@@ -431,6 +432,12 @@ struct cord {
 	struct mempool fiber_mempool;
 	/** A runtime slab cache for general use in this cord. */
 	struct slab_cache slabc;
+	/**
+	 * Lessor of the runtime quota. Allows to increase runtime
+	 * quota precission and decrease pmatomics usage. Used
+	 * by rtmalloc allocator.
+	 */
+	struct quota_lessor runtime_quota;
 	/** The "main" fiber of this cord, the scheduler. */
 	struct fiber sched;
 	char name[FIBER_NAME_MAX];

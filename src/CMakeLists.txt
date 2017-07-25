@@ -91,6 +91,7 @@ set (core_sources
      assoc.c
      util.c
      random.c
+     rtmalloc.c
  )
 
 if (TARGET_OS_NETBSD)

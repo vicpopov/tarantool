@@ -138,3 +138,8 @@ target_link_libraries(column_mask.test box unit)
 
 add_executable(vy_write_iterator.test vy_write_iterator.c vy_iterators_helper.c)
 target_link_libraries(vy_write_iterator.test box unit)
+
+if (HAVE_MALLOC_QUOTA)
+    add_executable(rtmalloc.test rtmalloc.cc)
+    target_link_libraries(rtmalloc.test core unit)
+endif()

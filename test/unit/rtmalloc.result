@@ -1,0 +1,38 @@
+1..3
+    1..14
+    ok 1 - quota is empty
+    ok 2 - rtmalloc allocated
+    ok 3 - quota accounted malloc
+    ok 4 - leased >= 100
+    ok 5 - available 1Mb - malloced size
+    ok 6 - lease end did not freed quota
+    ok 7 - free returned memory to lessor
+    ok 8 - leased zero
+    ok 9 - rtcalloc sets zeros
+    ok 10 - leased int[5] array
+    ok 11 - source quota did not change
+    ok 12 - leased increased after realloc
+    ok 13 - leased zero
+    ok 14 - source quota is freed
+ok 1 - subtests
+    1..11
+    ok 1 - quota is empty
+    ok 2 - realloc from NULL
+    ok 3 - leased realloc
+    ok 4 - quota used
+    ok 5 - realloc failed
+    ok 6 - diag is set
+    ok 7 - error is OutOfMemory
+    ok 8 - leased did not changed
+    ok 9 - quota used did not changed
+    ok 10 - leased zero
+    ok 11 - source quota is freed
+ok 2 - subtests
+    1..6
+    ok 1 - diag is set
+    ok 2 - error is OutOfMemory
+    ok 3 - diag is set
+    ok 4 - error is OutOfMemory
+    ok 5 - diag is set
+    ok 6 - error is OutOfMemory
+ok 3 - subtests

@@ -50,6 +50,7 @@ memory_init();
 
 void
 memory_free();
+
 #if defined(__cplusplus)
 } /* extern "C" */
 #endif /* defined(__cplusplus) */

@@ -1015,7 +1015,7 @@ int tarantoolSqlite3MakeIdxOpts(SqliteIndex *index, const char *zSql, void *buf)
 	 * indices created via SQL engine are unique.
 	 */
 	p = enc->encode_str(p, "unique", 6);
-	p = enc->encode_bool(p, 1);
+	p = enc->encode_bool(p, index->uniqNotNull);
 	p = enc->encode_str(p, "sql", 3);
 	p = enc->encode_str(p, zSql, zSql ? strlen(zSql) : 0);
 	return (int)(p - base);

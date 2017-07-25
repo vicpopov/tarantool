@@ -161,7 +161,7 @@ int sqlite3_blob_open(
     zErr = 0;
 
     sqlite3BtreeEnterAll(db);
-    pTab = sqlite3LocateTable(pParse, 0, zTable, zDb);
+    pTab = sqlite3LocateTable(pParse, 0, zTable);
     if( pTab && IsVirtual(pTab) ){
       pTab = 0;
       sqlite3ErrorMsg(pParse, "cannot open virtual table: %s", zTable);
@@ -187,7 +187,7 @@ int sqlite3_blob_open(
       goto blob_open_out;
     }
     pBlob->pTab = pTab;
-    pBlob->zDb = db->aDb[sqlite3SchemaToIndex(db, pTab->pSchema)].zDbSName;
+    pBlob->zDb = db->mdb.zDbSName;
 
     /* Now search pTab for the exact column. */
     for(iCol=0; iCol<pTab->nCol; iCol++) {

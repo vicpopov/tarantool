@@ -1573,7 +1573,6 @@ static char *createTableStmt(sqlite3 *db, Table *p){
 static int resizeIndexObject(sqlite3 *db, Index *pIdx, int N){
   char *zExtra;
   int nByte;
-  if( pIdx->nColumn>=N ) return SQLITE_OK;
   assert( pIdx->isResized==0 );
   nByte = (sizeof(char*) + sizeof(i16) + 1)*N;
   zExtra = sqlite3DbMallocZero(db, nByte);
@@ -1715,24 +1714,7 @@ static void convertToWithoutRowidTable(Parse *pParse, Table *pTab){
   for(pIdx=pTab->pIndex; pIdx; pIdx=pIdx->pNext){
     int n;
     if( IsPrimaryKeyIndex(pIdx) ) continue;
-    for(i=n=0; i<nPk; i++){
-      if( !hasColumn(pIdx->aiColumn, pIdx->nKeyCol, pPk->aiColumn[i]) ) n++;
-    }
-    if( n==0 ){
-      /* This index is a superset of the primary key */
-      pIdx->nColumn = pIdx->nKeyCol;
-      continue;
-    }
-    if( resizeIndexObject(db, pIdx, pIdx->nKeyCol+n) ) return;
-    for(i=0, j=pIdx->nKeyCol; i<nPk; i++){
-      if( !hasColumn(pIdx->aiColumn, pIdx->nKeyCol, pPk->aiColumn[i]) ){
-        pIdx->aiColumn[j] = pPk->aiColumn[i];
-        pIdx->azColl[j] = pPk->azColl[i];
-        j++;
-      }
-    }
-    assert( pIdx->nColumn>=pIdx->nKeyCol+n );
-    assert( pIdx->nColumn>=j );
+    if( resizeIndexObject(db, pIdx, pIdx->nKeyCol) ) return;
   }
 
   /* Add all table columns to the PRIMARY KEY index

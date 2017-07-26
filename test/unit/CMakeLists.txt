@@ -142,4 +142,7 @@ target_link_libraries(vy_write_iterator.test box unit)
 if (HAVE_MALLOC_QUOTA)
     add_executable(rtmalloc.test rtmalloc.cc)
     target_link_libraries(rtmalloc.test core unit)
+
+    add_executable(rtmalloc_vs_arena.test rtmalloc_vs_arena.cc)
+    target_link_libraries(rtmalloc_vs_arena.test core unit box stdc++ pthread)
 endif()

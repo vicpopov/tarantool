@@ -786,10 +786,16 @@ void sqlite3GenerateRowIndexDelete(
 
   v = pParse->pVdbe;
   pPk = HasRowid(pTab) ? 0 : sqlite3PrimaryKeyIndex(pTab);
-  for(i=0, pIdx=pTab->pIndex; pIdx; i++, pIdx=pIdx->pNext){
+  if (StoredInTarantool(pTab)){
+    VdbeModuleComment((v, "GenRowIdxDel for %s", pIdx->zName));
+    r1 = sqlite3GenerateIndexKey(pParse, pPk, iDataCur, 0, 1,
+                                 &iPartIdxLabel, pPrior, r1);
+    sqlite3VdbeAddOp3(v, OP_IdxDelete, iIdxCur, r1,
+                      pPk->uniqNotNull ? pPk->nKeyCol : pPk->nColumn);
+    sqlite3ResolvePartIdxLabel(pParse, iPartIdxLabel);
+  }else for(i=0, pIdx=pTab->pIndex; pIdx; i++, pIdx=pIdx->pNext){
     assert( iIdxCur+i!=iDataCur || pPk==pIdx );
     if( aRegIdx!=0 && aRegIdx[i]==0 ) continue;
-    if( pIdx==pPk ) continue;
     if( iIdxCur+i==iIdxNoSeek ) continue;
     VdbeModuleComment((v, "GenRowIdxDel for %s", pIdx->zName));
     r1 = sqlite3GenerateIndexKey(pParse, pIdx, iDataCur, 0, 1,

@@ -1629,7 +1629,10 @@ sqlite3GenerateConstraintChecks(Parse * pParse,	/* The parser context */
 	 ** This loop also handles the case of the PRIMARY KEY index for a
 	 ** WITHOUT ROWID table.
 	 */
-	for (ix = 0, pIdx = pTab->pIndex; pIdx; pIdx = pIdx->pNext, ix++) {
+	//for (ix = 0, pIdx = pTab->pIndex; pIdx; pIdx = pIdx->pNext, ix++) {
+	do{
+		ix = 0;
+		pIdx = pTab->pIndex;
 		int regIdx;	/* Range of registers hold conent for pIdx */
 		int regR;	/* Range of registers holding conflicting PK */
 		int iThisCur;	/* Cursor for this UNIQUE index */
@@ -1861,7 +1864,7 @@ sqlite3GenerateConstraintChecks(Parse * pParse,	/* The parser context */
 		sqlite3VdbeResolveLabel(v, addrUniqueOk);
 		if (regR != regIdx)
 			sqlite3ReleaseTempRange(pParse, regR, nPkField);
-	}
+	} while(0);
 	if (ipkTop) {
 		sqlite3VdbeGoto(v, ipkTop + 1);
 		sqlite3VdbeJumpHere(v, ipkBottom);

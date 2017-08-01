@@ -1,0 +1,9 @@
+1..1
+	*** test_basic ***
+    1..4
+    ok 1 - vy_index_env_create
+    ok 2 - key_def is not NULL
+    ok 3 - tuple_format_new is not NULL
+    ok 4 - index is not NULL
+ok 1 - subtests
+	*** test_basic: done ***

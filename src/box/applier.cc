@@ -97,6 +97,47 @@ applier_log_error(struct applier *applier, struct error *e)
 	applier->last_logged_errcode = errcode;
 }
 
+/*
+ * Fiber function to write vclock to replication master.
+ */
+static int
+applier_writer_f(va_list ap)
+{
+	struct applier *applier = va_arg(ap, struct applier *);
+	struct ev_io io;
+	coio_create(&io, applier->io.fd);
+
+	/* Re-connect loop */
+	while (fiber_cond_wait(&applier->writer_cond) == 0) {
+		if (fiber_is_cancelled())
+			break;
+		if (applier->state != APPLIER_FOLLOW)
+			continue;
+		try {
+			struct xrow_header xrow;
+			xrow_encode_vclock(&xrow, &replicaset_vclock);
+			coio_write_xrow(&io, &xrow);
+		} catch (SocketError *e) {
+			/*
+			 * Do not exit, if there a network error then this
+			 * fiber will be woken next time after when a new
+			 * data recieved.
+			 */
+			e->log();
+		} catch (Exception *e) {
+			/*
+			 * Some unwanted exception (may be a memory
+			 * allocation trouble or something else), just
+			 * try to resend on next time.
+			 */
+			e->log();
+		}
+		fiber_gc();
+		fiber_cond_wait(&applier->writer_cond);
+	}
+	return 0;
+}
+
 /**
  * Connect to a remote host and authenticate the client.
  */
@@ -188,6 +229,17 @@ done:
 	/* auth succeeded */
 	say_info("authenticated");
 	applier_set_state(applier, APPLIER_READY);
+
+	if (applier->writer == NULL &&
+	    applier->version_id >= version_id(1, 7, 4)) {
+		char name[FIBER_NAME_MAX];
+		int pos = snprintf(name, sizeof(name), "applierw/");
+		uri_format(name + pos, sizeof(name) - pos, &applier->uri, false);
+
+		applier->writer = fiber_new_xc(name, applier_writer_f);
+		fiber_set_joinable(applier->writer, true);
+		fiber_start(applier->writer, applier);
+	}
 }
 
 /**
@@ -222,7 +274,7 @@ applier_join(struct applier *applier)
 		 * Used to initialize the replica's initial
 		 * vclock in bootstrap_from_master()
 		 */
-		xrow_decode_vclock(&row, &replicaset_vclock);
+		xrow_decode_vclock_xc(&row, &replicaset_vclock);
 	}
 
 	applier_set_state(applier, APPLIER_INITIAL_JOIN);
@@ -245,7 +297,7 @@ applier_join(struct applier *applier)
 				 * vclock yet, do it now. In 1.7+
 				 * this vlcock is not used.
 				 */
-				xrow_decode_vclock(&row, &replicaset_vclock);
+				xrow_decode_vclock_xc(&row, &replicaset_vclock);
 			}
 			break; /* end of stream */
 		} else if (iproto_type_is_error(row.type)) {
@@ -330,7 +382,7 @@ applier_subscribe(struct applier *applier)
 		 */
 		struct vclock vclock;
 		vclock_create(&vclock);
-		xrow_decode_vclock(&row, &vclock);
+		xrow_decode_vclock_xc(&row, &vclock);
 	}
 	/**
 	 * Tarantool < 1.6.7:
@@ -376,6 +428,8 @@ applier_subscribe(struct applier *applier)
 				      row.lsn);
 			xstream_write_xc(applier->subscribe_stream, &row);
 		}
+		if (applier->version_id > version_id(1, 7, 4))
+			fiber_cond_signal(&applier->writer_cond);
 		iobuf_reset(iobuf);
 		fiber_gc();
 	}
@@ -488,9 +542,17 @@ applier_start(struct applier *applier)
 void
 applier_stop(struct applier *applier)
 {
-	struct fiber *f = applier->reader;
+	struct fiber *f = applier->writer;
+	if (f != NULL) {
+		fiber_cancel(f);
+		fiber_join(f);
+		applier->writer = NULL;
+	}
+
+	f = applier->reader;
 	if (f == NULL)
 		return;
+
 	fiber_cancel(f);
 	fiber_join(f);
 	applier_set_state(applier, APPLIER_OFF);
@@ -523,6 +585,7 @@ applier_new(const char *uri, struct xstream *join_stream,
 	applier->last_row_time = ev_now(loop());
 	rlist_create(&applier->on_state);
 	fiber_channel_create(&applier->pause, 0);
+	fiber_cond_create(&applier->writer_cond);
 
 	return applier;
 }
@@ -535,6 +598,7 @@ applier_delete(struct applier *applier)
 	assert(applier->io.fd == -1);
 	fiber_channel_destroy(&applier->pause);
 	trigger_destroy(&applier->on_state);
+	fiber_cond_destroy(&applier->writer_cond);
 	free(applier);
 }
 

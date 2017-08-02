@@ -41,9 +41,9 @@ struct box_function_ctx {
 };
 
 void
-box_process_call(struct call_request *request, struct obuf *out);
+box_process_call(struct call_request *request, struct obuf **out_p);
 
 void
-box_process_eval(struct call_request *request, struct obuf *out);
+box_process_eval(struct call_request *request, struct obuf **out_p);
 
 #endif /* INCLUDES_TARANTOOL_MOD_BOX_CALL_H */

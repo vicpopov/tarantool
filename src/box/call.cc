@@ -69,7 +69,7 @@ access_check_func(const char *name, uint32_t name_len)
 }
 
 static int
-func_call(struct func *func, struct call_request *request, struct obuf *out)
+func_call(struct func *func, struct call_request *request, struct obuf **out_p)
 {
 	assert(func != NULL && func->def->language == FUNC_LANGUAGE_C);
 	if (func->func == NULL)
@@ -86,6 +86,12 @@ func_call(struct func *func, struct call_request *request, struct obuf *out)
 	assert(!in_txn()); /* transaction is not started */
 	/* Call function from the shared library */
 	int rc = func->func(&ctx, request->args, request->args_end);
+	/*
+	 * Get the active session obuf and write an entire reponse
+	 * without yields, because during yield the active *obuf,
+	 * pointed by obuf_p, can be changed.
+	 */
+	struct obuf *out = *out_p;
 	if (rc != 0) {
 		if (diag_last_error(&fiber()->diag) == NULL) {
 			/* Stored procedure forget to set diag  */
@@ -130,7 +136,7 @@ error:
 }
 
 void
-box_process_call(struct call_request *request, struct obuf *out)
+box_process_call(struct call_request *request, struct obuf **out_p)
 {
 	rmean_collect(rmean_box, IPROTO_CALL, 1);
 	/**
@@ -171,9 +177,9 @@ box_process_call(struct call_request *request, struct obuf *out)
 
 	int rc;
 	if (func && func->def->language == FUNC_LANGUAGE_C) {
-		rc = func_call(func, request, out);
+		rc = func_call(func, request, out_p);
 	} else {
-		rc = box_lua_call(request, out);
+		rc = box_lua_call(request, out_p);
 	}
 	/* Restore the original user */
 	if (orig_credentials)
@@ -193,12 +199,12 @@ box_process_call(struct call_request *request, struct obuf *out)
 }
 
 void
-box_process_eval(struct call_request *request, struct obuf *out)
+box_process_eval(struct call_request *request, struct obuf **out_p)
 {
 	rmean_collect(rmean_box, IPROTO_EVAL, 1);
 	/* Check permissions */
 	access_check_universe(PRIV_X);
-	if (box_lua_eval(request, out) != 0) {
+	if (box_lua_eval(request, out_p) != 0) {
 		txn_rollback();
 		diag_raise();
 	}

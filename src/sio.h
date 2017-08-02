@@ -81,7 +81,7 @@ sio_move_iov(struct iovec *iov, size_t nwr, size_t *iov_len)
  * to adjust to a partial write.
  */
 static inline void
-sio_add_to_iov(struct iovec *iov, size_t size)
+sio_add_to_iov(struct iovec *iov, ssize_t size)
 {
 	iov->iov_len += size;
 	iov->iov_base = (char *) iov->iov_base - size;

@@ -51,10 +51,10 @@ struct obuf;
  * (implementation of 'CALL' command code).
  */
 int
-box_lua_call(struct call_request *request, struct obuf *out);
+box_lua_call(struct call_request *request, struct obuf **out_p);
 
 int
-box_lua_eval(struct call_request *request, struct obuf *out);
+box_lua_eval(struct call_request *request, struct obuf **out_p);
 
 #if defined(__cplusplus)
 } /* extern "C" */

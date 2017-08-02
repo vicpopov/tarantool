@@ -67,21 +67,12 @@ struct iobuf *
 iobuf_new_mt(struct slab_cache *slabc_out);
 
 /**
- * @pre 'out' must be freed if necessary by the consumer cord
- */
-void
-iobuf_delete_mt(struct iobuf *iobuf);
-
-/**
  * Must be called when we are done sending all output,
  * and there is likely no cached input.
  * Is automatically called by iobuf_flush().
  */
 void
 iobuf_reset(struct iobuf *iobuf);
-
-void
-iobuf_reset_mt(struct iobuf *iobuf);
 
 /** Return true if there is no input and no output and
  * no one has pinned the buffer - i.e. it's safe to
@@ -102,5 +93,8 @@ iobuf_init();
 
 void
 iobuf_set_readahead(int readahead);
+
+void
+ibuf_reset_with_readahead(struct ibuf *ibuf);
 
 #endif /* TARANTOOL_IOBUF_H_INCLUDED */

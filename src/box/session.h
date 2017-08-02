@@ -40,6 +40,8 @@
 extern "C" {
 #endif /* defined(__cplusplus) */
 
+struct obuf;
+
 void
 session_init();
 

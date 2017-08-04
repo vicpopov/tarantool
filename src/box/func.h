@@ -32,9 +32,25 @@
  */
 #include "key_def.h"
 
+#include <stdint.h>
+
 #if defined(__cplusplus)
 extern "C" {
 #endif /* defined(__cplusplus) */
+
+/**
+ * Dynamic shared module.
+ */
+struct module {
+	/** Module handle. */
+	void *handle;
+	/** Count of imported functions. */
+	uint32_t funcs;
+	/** Count of active calls. */
+	uint32_t calls;
+	/** True if module should be unloaded. */
+	bool unloading;
+};
 
 /**
  * Stored function.
@@ -49,7 +65,7 @@ struct func {
 	 * Each stored function keeps a handle to the
 	 * dynamic library for the C callback.
 	 */
-	void *dlhandle;
+	struct module *module;
 	/**
 	 * Authentication id of the owner of the function,
 	 * used for set-user-id functions.

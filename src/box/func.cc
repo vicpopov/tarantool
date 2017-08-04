@@ -30,10 +30,96 @@
  */
 #include "func.h"
 
+#include "assoc.h"
+
 #include <dlfcn.h>
 
 #include "lua/utils.h"
 #include "scoped_guard.h"
+
+static struct mh_strnptr_t *modules = NULL;
+
+/*
+ * Return module struct and load corresponding dso if not loaded yet.
+ */
+static struct module *
+module_load(const char *name)
+{
+	/*
+	 * Module_load is the first function that first should be called
+	 * if any module activity exists, so it is safe to check here
+	 * modules hash table.
+	 */
+	if (modules == NULL && (modules = mh_strnptr_new()) == NULL) {
+		tnt_error(OutOfMemory, sizeof(*modules), "malloc",
+			  "modules hash table");
+		return NULL;
+	}
+
+	size_t name_len = strlen(name);
+	mh_int_t i = mh_strnptr_find_inp(modules, name, name_len);
+	if (i != mh_end(modules))
+		return (struct module *) mh_strnptr_node(modules, i)->val;
+	struct module *module = (struct module *)malloc(sizeof(struct module));
+	if (module == NULL) {
+		tnt_error(OutOfMemory, sizeof(struct module), "malloc",
+			  "struct module");
+		return NULL;
+	}
+	module->funcs = 0;
+	module->calls = 0;
+	module->unloading = false;
+	module->handle = dlopen(name, RTLD_NOW | RTLD_LOCAL);
+	if (module->handle == NULL) {
+		free(module);
+		tnt_error(LoggedError, ER_LOAD_FUNCTION, name,
+			  dlerror());
+		return NULL;
+	}
+
+	uint32_t name_hash = mh_strn_hash(name, name_len);
+	const struct mh_strnptr_node_t strnode = {
+		name, name_len, name_hash, module};
+
+	i = mh_strnptr_put(modules, &strnode, NULL, NULL);
+	if (i == mh_end(modules)) {
+		dlclose(module->handle);
+		free(module);
+		tnt_error(OutOfMemory, sizeof(strnode), "mh_strnptr_put",
+			  "strnptr node");
+		return NULL;
+	}
+	return module;
+}
+
+/*
+ * Import a function from the module.
+ */
+static box_function_f
+module_get(struct module *module, const char *name)
+{
+	box_function_f f = (box_function_f)dlsym(module->handle, name);
+	if (f == NULL) {
+		tnt_error(LoggedError, ER_LOAD_FUNCTION, name, dlerror());
+		return NULL;
+	}
+	++module->funcs;
+	return f;
+}
+
+/*
+ * Check if module dso can be closed.
+ */
+static bool
+module_check(struct module *module)
+{
+	if (module->unloading == false ||
+	    module->funcs != 0 || module->calls != 0)
+		return true;
+	dlclose(module->handle);
+	free(module);
+	return false;
+}
 
 struct func *
 func_new(struct func_def *def)
@@ -59,16 +145,18 @@ func_new(struct func_def *def)
 	 */
 	func->owner_credentials.auth_token = BOX_USER_MAX; /* invalid value */
 	func->func = NULL;
-	func->dlhandle = NULL;
+	func->module = NULL;
 	return func;
 }
 
 static void
 func_unload(struct func *func)
 {
-	if (func->dlhandle)
-		dlclose(func->dlhandle);
-	func->dlhandle = NULL;
+	if (func->module) {
+		--func->module->funcs;
+		module_check(func->module);
+	}
+	func->module = NULL;
 	func->func = NULL;
 }
 
@@ -119,16 +207,14 @@ func_load(struct func *func)
 		tnt_raise(ClientError, ER_LOAD_FUNCTION, func->def->name,
 			  "shared library not found in the search path");
 	}
-	func->dlhandle = dlopen(lua_tostring(L, -1), RTLD_NOW | RTLD_LOCAL);
-	if (func->dlhandle == NULL) {
-		tnt_raise(LoggedError, ER_LOAD_FUNCTION, func->def->name,
-			  dlerror());
-	}
-	func->func = (box_function_f) dlsym(func->dlhandle, sym);
-	if (func->func == NULL) {
-		tnt_raise(LoggedError, ER_LOAD_FUNCTION, func->def->name,
-			  dlerror());
-	}
+	const char *module_name = lua_tostring(L, -1);
+	struct module *module = module_load(module_name);
+	if (module == NULL)
+		diag_raise();
+	func->func = module_get(module, sym);
+	if (func->func == NULL)
+		diag_raise();
+	func->module = module;
 }
 
 void

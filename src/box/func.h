@@ -96,6 +96,18 @@ func_delete(struct func *func);
 void
 func_load(struct func *func);
 
+static inline int
+func_call(struct func *func, box_function_ctx_t *ctx,
+	  const char *args, const char *args_end)
+{
+	if (func->module != NULL)
+		++func->module->calls;
+	int rc = func->func(ctx, args, args_end);
+	if (func->module != NULL)
+		--func->module->calls;
+	return rc;
+}
+
 #endif /* defined(__cplusplus) */
 
 #endif /* TARANTOOL_BOX_FUNC_H_INCLUDED */

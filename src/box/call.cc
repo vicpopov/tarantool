@@ -85,7 +85,7 @@ func_call(struct func *func, struct call_request *request, struct obuf *out)
 	diag_clear(&fiber()->diag);
 	assert(!in_txn()); /* transaction is not started */
 	/* Call function from the shared library */
-	int rc = func->func(&ctx, request->args, request->args_end);
+	int rc = func_call(func, &ctx, request->args, request->args_end);
 	if (rc != 0) {
 		if (diag_last_error(&fiber()->diag) == NULL) {
 			/* Stored procedure forget to set diag  */

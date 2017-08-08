@@ -34,6 +34,8 @@
 
 #include <stdint.h>
 
+#include "small/rlist.h"
+
 #if defined(__cplusplus)
 extern "C" {
 #endif /* defined(__cplusplus) */
@@ -44,8 +46,8 @@ extern "C" {
 struct module {
 	/** Module handle. */
 	void *handle;
-	/** Count of imported functions. */
-	uint32_t funcs;
+	/** List of imported functions. */
+	rlist funcs;
 	/** Count of active calls. */
 	uint32_t calls;
 	/** True if module should be unloaded. */
@@ -57,6 +59,10 @@ struct module {
  */
 struct func {
 	struct func_def *def;
+	/**
+	 * Anchor for module membership.
+	 */
+	struct rlist item;
 	/**
 	 * For C functions, the body of the function.
 	 */
@@ -96,18 +102,12 @@ func_delete(struct func *func);
 void
 func_load(struct func *func);
 
-static inline int
-func_call(struct func *func, box_function_ctx_t *ctx,
-	  const char *args, const char *args_end)
-{
-	if (func->module != NULL)
-		++func->module->calls;
-	int rc = func->func(ctx, args, args_end);
-	if (func->module != NULL)
-		--func->module->calls;
-	return rc;
-}
+void
+func_reload(struct func *func);
 
+int
+func_call(struct func *func, box_function_ctx_t *ctx,
+	  const char *args, const char *args_end);
 #endif /* defined(__cplusplus) */
 
 #endif /* TARANTOOL_BOX_FUNC_H_INCLUDED */

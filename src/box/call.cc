@@ -130,6 +130,16 @@ error:
 }
 
 void
+box_func_reload(const char *name)
+{
+	size_t name_len = strlen(name);
+	struct func *func = access_check_func(name, name_len);
+	if (func->def->language != FUNC_LANGUAGE_C || func->func == NULL)
+		return; /* Nothing to do */
+	func_reload(func);
+}
+
+void
 box_process_call(struct call_request *request, struct obuf *out)
 {
 	rmean_collect(rmean_box, IPROTO_CALL, 1);

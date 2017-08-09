@@ -85,6 +85,7 @@ box_c_call(struct func *func, struct call_request *request, struct obuf *out)
 
 	/* Call function from the shared library */
 	int rc = func_call(func, &ctx, request->args, request->args_end);
+	func = NULL; /* May be deleted by DDL */
 	if (rc != 0) {
 		if (diag_last_error(&fiber()->diag) == NULL) {
 			/* Stored procedure forget to set diag  */
@@ -126,6 +127,17 @@ box_c_call(struct func *func, struct call_request *request, struct obuf *out)
 error:
 	txn_rollback();
 	return -1;
+}
+
+void
+box_func_reload(const char *name)
+{
+	size_t name_len = strlen(name);
+	struct func *func = access_check_func(name, name_len);
+	if (func->def->language != FUNC_LANGUAGE_C || func->func == NULL)
+		return; /* Nothing to do */
+	if (func_reload(func) != 0)
+		diag_raise();
 }
 
 void

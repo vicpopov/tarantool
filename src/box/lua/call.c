@@ -245,7 +245,6 @@ luamp_encode_call(lua_State *L, struct luaL_serializer *cfg,
 
 struct lua_function_ctx {
 	struct call_request *request;
-	struct obuf *out;
 	struct obuf_svp svp;
 	/* true if `out' was changed and `svp' can be used for rollback  */
 	bool out_is_dirty;
@@ -261,7 +260,6 @@ execute_lua_call(lua_State *L)
 	struct lua_function_ctx *ctx = (struct lua_function_ctx *)
 		lua_topointer(L, 1);
 	struct call_request *request = ctx->request;
-	struct obuf *out = ctx->out;
 	struct obuf_svp *svp = &ctx->svp;
 	lua_settop(L, 0); /* clear the stack to simplify the logic below */
 
@@ -302,6 +300,9 @@ execute_lua_call(lua_State *L)
 	 * while Lua table size is pretty much unlimited.
 	 */
 	/* TODO: forbid explicit yield from __serialize or __index here */
+	struct obuf *out = call_request_obuf(request);
+	if (out == NULL)
+		luaT_error(L);
 	if (iproto_prepare_select(out, svp) != 0)
 		luaT_error(L);
 	ctx->out_is_dirty = true;
@@ -334,7 +335,6 @@ execute_lua_eval(lua_State *L)
 	struct lua_function_ctx *ctx = (struct lua_function_ctx *)
 		lua_topointer(L, 1);
 	struct call_request *request = ctx->request;
-	struct obuf *out = ctx->out;
 	struct obuf_svp *svp = &ctx->svp;
 	lua_settop(L, 0); /* clear the stack to simplify the logic below */
 
@@ -357,9 +357,12 @@ execute_lua_eval(lua_State *L)
 	/* Call compiled code */
 	lua_call(L, arg_count, LUA_MULTRET);
 
+	struct obuf *out = call_request_obuf(request);
+	if (out == NULL)
+		luaT_error(L);
 	/* Send results of the called procedure to the client. */
 	if (iproto_prepare_select(out, svp) != 0)
-		diag_raise();
+		luaT_error(L);
 	ctx->out_is_dirty = true;
 	struct mpstream stream;
 	mpstream_init(&stream, out, obuf_reserve_cb, obuf_alloc_cb,
@@ -376,9 +379,9 @@ execute_lua_eval(lua_State *L)
 }
 
 static inline int
-box_process_lua(struct call_request *request, struct obuf *out, lua_CFunction handler)
+box_process_lua(struct call_request *request, lua_CFunction handler)
 {
-	struct lua_function_ctx ctx = { request, out, {0, 0, 0}, false };
+	struct lua_function_ctx ctx = { request, {0, 0, 0}, false };
 
 	lua_State *L = lua_newthread(tarantool_L);
 	int coro_ref = luaL_ref(tarantool_L, LUA_REGISTRYINDEX);
@@ -386,6 +389,8 @@ box_process_lua(struct call_request *request, struct obuf *out, lua_CFunction ha
 	luaL_unref(tarantool_L, LUA_REGISTRYINDEX, coro_ref);
 	if (rc != 0) {
 		if (ctx.out_is_dirty) {
+			struct obuf *out = call_request_obuf(request);
+			assert(out != NULL);
 			/*
 			 * Output buffer has been altered, rollback to svp.
 			 * (!) Please note that a save point for output buffer
@@ -403,15 +408,15 @@ box_process_lua(struct call_request *request, struct obuf *out, lua_CFunction ha
 }
 
 int
-box_lua_call(struct call_request *request, struct obuf *out)
+box_lua_call(struct call_request *request)
 {
-	return box_process_lua(request, out, execute_lua_call);
+	return box_process_lua(request, execute_lua_call);
 }
 
 int
-box_lua_eval(struct call_request *request, struct obuf *out)
+box_lua_eval(struct call_request *request)
 {
-	return box_process_lua(request, out, execute_lua_eval);
+	return box_process_lua(request, execute_lua_eval);
 }
 
 static const struct luaL_Reg boxlib_internal[] = {

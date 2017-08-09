@@ -33,16 +33,28 @@
 
 #include <stdint.h>
 
-struct obuf;
-
 struct box_function_ctx {
 	struct port *port;
 };
 
-void
-box_process_call(struct call_request *request, struct obuf *out);
+#ifdef __cplusplus
+extern "C"
+#endif
+/**
+ * Get output buffer to write response on a specified request.
+ * The buffer is valid until next yield.
+ * @param request Request to get buffer from.
+ *
+ * @retval not NULL Output buffer, valid until yield.
+ * @retval     NULL Memory error.
+ */
+struct obuf *
+call_request_obuf(struct call_request *request);
 
 void
-box_process_eval(struct call_request *request, struct obuf *out);
+box_process_call(struct call_request *request);
+
+void
+box_process_eval(struct call_request *request);
 
 #endif /* INCLUDES_TARANTOOL_MOD_BOX_CALL_H */

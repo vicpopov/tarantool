@@ -1,5 +1,3 @@
-#ifndef TARANTOOL_IOBUF_H_INCLUDED
-#define TARANTOOL_IOBUF_H_INCLUDED
 /*
  * Copyright 2010-2016, Tarantool AUTHORS, please see AUTHORS file.
  *
@@ -30,53 +28,38 @@
  * THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-#include <sys/uio.h>
-#include <stdbool.h>
-#include "small/ibuf.h"
-#include "small/obuf.h"
+#include <stdlib.h>
+#include "fiber.h"
+#include "iproto_buffer.h"
+#include "iobuf.h"
 
-extern unsigned iobuf_readahead;
-
-struct iobuf
+struct iproto_buffer *
+iproto_buffer_new(struct iproto_connection *conn)
 {
-	/** Input buffer. */
-	struct ibuf in;
-	/** Output buffer. */
-	struct obuf out;
-};
-
-/**
- * Create an instance of input/output buffer.
- * @warning not safe to use in case of multi-threaded
- * access to in and out.
- */
-struct iobuf *
-iobuf_new();
-
-/**
- * Destroy an input/output buffer.
- * @warning a counterpart of iobuf_new(), only for single threaded
- * access.
- */
-void
-iobuf_delete(struct iobuf *iobuf);
-
-/**
- * Must be called when we are done sending all output,
- * and there is likely no cached input.
- * Is automatically called by iobuf_flush().
- */
-void
-iobuf_reset(struct iobuf *iobuf);
+	struct iproto_buffer *ret =
+		(struct iproto_buffer *) malloc(sizeof(*ret));
+	if (ret == NULL) {
+		diag_set(OutOfMemory, sizeof(*ret), "malloc", "ret");
+		return NULL;
+	}
+	obuf_create(&ret->obuf, cord_slab_cache(), iobuf_readahead);
+	ret->connection = conn;
+	rlist_create(&ret->in_batch);
+	return ret;
+}
 
 void
-ibuf_reset_mt(struct ibuf *ibuf);
+iproto_buffer_delete(struct iproto_buffer *buffer)
+{
+	obuf_destroy(&buffer->obuf);
+	free(buffer);
+}
 
-/**
- * Got to be called in each thread iobuf subsystem is
- * used in.
- */
 void
-iobuf_init();
-
-#endif /* TARANTOOL_IOBUF_H_INCLUDED */
+iproto_buffer_delete_list(struct rlist *buffers)
+{
+	struct iproto_buffer *next, *tmp;
+	rlist_foreach_entry_safe(next, buffers, in_batch, tmp)
+		iproto_buffer_delete(next);
+	rlist_create(buffers);
+}

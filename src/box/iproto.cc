@@ -43,9 +43,7 @@
 #include "say.h"
 #include "sio.h"
 #include "evio.h"
-#include "coio.h"
 #include "scoped_guard.h"
-#include "memory.h"
 
 #include "port.h"
 #include "iobuf.h"
@@ -58,6 +56,7 @@
 #include "replication.h" /* instance_uuid */
 #include "iproto_constants.h"
 #include "rmean.h"
+#include "iproto_buffer.h"
 
 /* The number of iproto messages in flight */
 enum { IPROTO_MSG_MAX = 768 };
@@ -69,8 +68,12 @@ enum { IPROTO_MSG_MAX = 768 };
  * from all connections are queued into a single queue
  * and processed in FIFO order.
  */
-struct iproto_msg: public cmsg
+struct iproto_msg
 {
+	/**
+	 * Message to deliver request data to tx thread and back.
+	 */
+	struct cmsg request_msg;
 	struct iproto_connection *connection;
 
 	/* --- Box msgs - actual requests for the transaction processor --- */
@@ -85,25 +88,32 @@ struct iproto_msg: public cmsg
 		struct auth_request auth_request;
 	};
 	/*
-	 * Remember the active iobuf of the connection,
-	 * in which the request is stored. The response
-	 * must be put into the out buffer of this iobuf.
+	 * Remember the ibuf of the connection, in which the
+	 * request is stored. Used to discard request data when
+	 * it is not needed anymore.
 	 */
-	struct iobuf *iobuf;
+	struct ibuf *ibuf;
 	/**
 	 * How much space the request takes in the
 	 * input buffer (len, header and body - all of it)
-	 * This also works as a reference counter to
-	 * iproto_connection object.
+	 * This also works as a reference counter to ibuf object.
 	 */
 	size_t len;
-	/** End of write position in the output buffer */
-	struct obuf_svp write_end;
 	/**
 	 * Used in "connect" msgs, true if connect trigger failed
 	 * and the connection must be closed.
 	 */
 	bool close_connection;
+	/**
+	 * List of flushed empty buffers to send them back to tx
+	 * thread and utilize.
+	 */
+	struct rlist flushed_buffers;
+	/**
+	 * List of full buffers, received from tx thread to flush
+	 * into sockets.
+	 */
+	struct rlist buffers_to_flush;
 };
 
 static struct mempool iproto_msg_pool;
@@ -114,6 +124,8 @@ iproto_msg_new(struct iproto_connection *con)
 	struct iproto_msg *msg =
 		(struct iproto_msg *) mempool_alloc_xc(&iproto_msg_pool);
 	msg->connection = con;
+	rlist_create(&msg->flushed_buffers);
+	rlist_create(&msg->buffers_to_flush);
 	return msg;
 }
 
@@ -123,10 +135,11 @@ iproto_msg_new(struct iproto_connection *con)
 static void
 iproto_resume();
 
-
 static inline void
-iproto_msg_delete(struct cmsg *msg)
+iproto_msg_delete(struct iproto_msg *msg)
 {
+	assert(rlist_empty(&msg->flushed_buffers));
+	assert(rlist_empty(&msg->buffers_to_flush));
 	mempool_free(&iproto_msg_pool, msg);
 	iproto_resume();
 }
@@ -167,22 +180,21 @@ const char *rmean_net_strings[IPROTO_LAST] = { "SENT", "RECEIVED" };
  *
  *  Receive from the network.
  *     |
- * +---|---------------------+   +------------+
- * |   |      IPROTO thread  |   | TX thread  |
- * |   v                     |   |            |
- * |iobuf[0].ibuf - - - - - -|- -|- - >+      |
- * |                         |   |     |      |
- * |          iobuf[1].ibuf  |   |     |      |
- * |                         |   |     |      |
- * |iobuf[0].out <- - - - - -|- -|- - -+      |
- * |    |                    |   |     |      |
- * |    |     iobuf[1].out <-|- -|- - -+      |
- * +----|-----------|--------+   +------------+
- *      |           v
- *      |        Send to
- *      |        network.
- *      v
- * Send to network after iobuf[1], i.e. older responses are sent first.
+ * +---|---------------------+   +----------------------+
+ * |   |      IPROTO thread  |   | TX thread            |
+ * |   v                     |   |                      |
+ * |ibuf[k] - - - - - - - - -|- -|- - >+ create obuf  <-|- - +
+ * |                         |   |     |                |    |
+ * |          ibuf[(k+1)%2]  |   |     | write response |    |
+ * |       pending responses |   |     | write response |    |
+ * |                         |   |     | ...            |    |
+ * |iproto_buffer[N] <-+     |   |     | write response |    |
+ * |iproto_buffer[N-1] |     |   |     |                |    |
+ * |     ...           +< - -|- -|- - -+ send obuf in   |    |
+ * |iproto_buffer[0]         |   |       batch          |    |
+ * +------|------------------+   +----------------------+    |
+ *        v                                                  |
+ *  Send to network and return to Tx  - - - - - - - - - - - -+
  *
  * ibuf structure:
  *                   rpos             wpos           end
@@ -197,23 +209,24 @@ const char *rmean_net_strings[IPROTO_LAST] = { "SENT", "RECEIVED" };
 struct iproto_connection
 {
 	/**
-	 * Two rotating buffers for I/O. Input is always read into
-	 * iobuf[0]. As soon as iobuf[0] input buffer becomes full,
-	 * iobuf[0] is moved to iobuf[1], for flushing. As soon as
-	 * all output in iobuf[1].out is sent to the client, iobuf[1]
-	 * and iobuf[0] are moved around again.
+	 * Two rotating input buffers. As soon as active buffer
+	 * becomes full the another ibuf becomes active, and old
+	 * one is waited for discarding all its requests. Each
+	 * request is discarded when its response is wrote by tx
+	 * thread in an output buffer.
 	 */
-	struct iobuf *iobuf[2];
+	struct ibuf ibuf[2];
+	struct ibuf *active_ibuf;
 	/*
-	 * Size of readahead which is not parsed yet, i.e.
-	 * size of a piece of request which is not fully read.
-	 * Is always relative to iobuf[0]->in.wpos. In other words,
-	 * iobuf[0]->in.wpos - parse_size gives the start of the
+	 * Size of readahead which is not parsed yet, i.e. size of
+	 * a piece of request which is not fully read. Is always
+	 * relative to active_ibuf->wpos. In other words,
+	 * active_ibuf->wpos - parse_size gives the start of the
 	 * unparsed request. A size rather than a pointer is used
-	 * to be safe in case in->buf is reallocated. Being
-	 * relative to in->wpos, rather than to in->rpos is helpful to
-	 * make sure ibuf_reserve() or iobuf rotation don't make
-	 * the value meaningless.
+	 * to be safe in case ibuf.buf is reallocated. Being
+	 * relative to ibuf.wpos, rather than to ibuf.rpos is
+	 * helpful to make sure ibuf_reserve() or ibuf rotation
+	 * don't make the value meaningless.
 	 */
 	size_t parse_size;
 	struct ev_io input;
@@ -224,7 +237,47 @@ struct iproto_connection
 	/* Pre-allocated disconnect msg. */
 	struct iproto_msg *disconnect;
 	struct rlist in_stop_list;
+	/**
+	 * Buffer used by tx thread for a current tx event loop.
+	 * All responses for this connection during the event loop
+	 * are wrote into this buffer. Then the buffer is sent to
+	 * iproto and a pointer is removed from active_obuf.
+	 */
+	struct iproto_buffer *active_obuf;
+	/**
+	 * List of buffers to flush into socket. The newer buffer,
+	 * the closer it is to the list tail.
+	 */
+	struct rlist buffers_to_flush;
 };
+
+/**
+ * Get not active ibuf. Used to rotate buffers by assigning
+ * next_ibuf() to the connection.active_ibuf.
+ * @param conn Connection to get ibuf.
+ * @retval Not active ibuf.
+ */
+static inline struct ibuf *
+iproto_connection_next_ibuf(struct iproto_connection *conn)
+{
+	if (conn->active_ibuf == &conn->ibuf[0])
+		return &conn->ibuf[1];
+	else
+		return &conn->ibuf[0];
+}
+
+/**
+ * Try to start input if it is stopped. Used when an ibuf
+ * request is discarded. It could allow to reset ibuf and read new
+ * requests.
+ * @param conn Connection to resume input.
+ */
+static inline void
+iproto_connection_resume_input(struct iproto_connection *conn)
+{
+	if (!ev_is_active(&conn->input) && rlist_empty(&conn->in_stop_list))
+		ev_feed_event(conn->loop, &conn->input, EV_READ);
+}
 
 static struct mempool iproto_connection_pool;
 static RLIST_HEAD(stopped_connections);
@@ -284,8 +337,7 @@ iproto_resume()
 static inline bool
 iproto_connection_is_idle(struct iproto_connection *con)
 {
-	return ibuf_used(&con->iobuf[0]->in) == 0 &&
-		ibuf_used(&con->iobuf[1]->in) == 0;
+	return ibuf_used(&con->ibuf[0]) == 0 && ibuf_used(&con->ibuf[1]) == 0;
 }
 
 static inline void
@@ -303,16 +355,17 @@ iproto_connection_stop(struct iproto_connection *con)
  * closing.
  * @param sock Socket to write to.
  * @param error Error to write.
+ * @param sync Request sync.
  */
 static inline void
-iproto_write_error_blocking(int sock, const struct error *e)
+iproto_write_error_blocking(int sock, const struct error *e, uint64_t sync)
 {
 	/* Set to blocking to write the error. */
 	int flags = fcntl(sock, F_GETFL, 0);
 	if (flags < 0)
 		return;
 	(void) fcntl(sock, F_SETFL, flags & (~O_NONBLOCK));
-	iproto_write_error(sock, e, ::schema_version);
+	iproto_write_error(sock, e, ::schema_version, sync);
 	(void) fcntl(sock, F_SETFL, flags);
 }
 
@@ -332,11 +385,13 @@ iproto_connection_delete(struct iproto_connection *con)
 	assert(!evio_has_fd(&con->input));
 	assert(con->session == NULL);
 	/*
-	 * The output buffers must have been deleted
-	 * in tx thread.
+	 * The output buffers must have been deleted in tx thread.
 	 */
-	iobuf_delete_mt(con->iobuf[0]);
-	iobuf_delete_mt(con->iobuf[1]);
+	ibuf_destroy(&con->ibuf[0]);
+	ibuf_destroy(&con->ibuf[1]);
+	/* All iproto_buffers must be returned to tx thread. */
+	assert(con->active_obuf == NULL);
+	assert(rlist_empty(&con->buffers_to_flush));
 	if (con->disconnect)
 		iproto_msg_delete(con->disconnect);
 	mempool_free(&iproto_connection_pool, con);
@@ -395,8 +450,11 @@ tx_process_disconnect(struct cmsg *m)
 	 * Got to be done in iproto thread since
 	 * that's where the memory is allocated.
 	 */
-	obuf_destroy(&con->iobuf[0]->out);
-	obuf_destroy(&con->iobuf[1]->out);
+	if (con->active_obuf != NULL) {
+		iproto_buffer_delete(con->active_obuf);
+		con->active_obuf = NULL;
+	}
+	iproto_buffer_delete_list(&con->buffers_to_flush);
 }
 
 /**
@@ -461,15 +519,96 @@ iproto_connection_new(const char *name, int fd)
 	con->loop = loop();
 	ev_io_init(&con->input, iproto_connection_on_input, fd, EV_READ);
 	ev_io_init(&con->output, iproto_connection_on_output, fd, EV_WRITE);
-	con->iobuf[0] = iobuf_new_mt(&tx_cord->slabc);
-	con->iobuf[1] = iobuf_new_mt(&tx_cord->slabc);
+	ibuf_create(&con->ibuf[0], cord_slab_cache(), iobuf_readahead);
+	ibuf_create(&con->ibuf[1], cord_slab_cache(), iobuf_readahead);
+	con->active_ibuf = &con->ibuf[0];
 	con->parse_size = 0;
 	con->session = NULL;
+	con->active_obuf = NULL;
+	rlist_create(&con->buffers_to_flush);
 	rlist_create(&con->in_stop_list);
 	/* It may be very awkward to allocate at close. */
 	con->disconnect = iproto_msg_new(con);
-	cmsg_init(con->disconnect, disconnect_route);
+	cmsg_init(&con->disconnect->request_msg, disconnect_route);
 	return con;
+}
+
+/**
+ * Global list of not empty iproto buffers to send them to iproto
+ * thread. The batch can be changed only by tx thread. Each
+ * connection can have only one active obuf during an tx event
+ * loop iteration. Tx thread after processing each iproto request
+ * searches active obuf of a connection. If it absenses, then
+ * it is created and appended to this batch. One time per tx
+ * thread's event loop iteration this batch is sent to iproto
+ * thread. Then this global variable is set to NULL to start
+ * collecting a new batch on next event loop iteration. Tx event
+ * loop example:
+ *
+ *  Create     +       <------<+ <- Write response to a new batch.
+ * obuf and -> |               |
+ *  write      |     Event     |
+ * response    v     Loop      ^ <- Flush buffers_to_iproto to
+ *             |               |    iproto thread.
+ *  Write      |               |
+ * response    +>------>------>+ <- Write response.
+ *                  ^
+ *                  |
+ *                Write
+ *               response
+ */
+static struct rlist *buffers_to_iproto = NULL;
+/**
+ * List of flushed buffers for tx thread. Only tx thread can
+ * utilize these buffers.
+ */
+static RLIST_HEAD(buffers_to_tx);
+
+/**
+ * Get output buffer used by a specified iproto connection. The
+ * result buffer can be used until a next yield. Entire response
+ * must be wrote before yield, because after yield the buffer
+ * could be sent to iproto thread for flushing.
+ * @param conn Connection to get obuf.
+ *
+ * @retval not NULL Output buffer, valid until yield.
+ * @retval     NULL Memory error.
+ */
+static struct obuf *
+iproto_connection_active_obuf(struct iproto_connection *conn)
+{
+	assert(cord() == tx_cord);
+	if (conn->active_obuf == NULL) {
+		conn->active_obuf = iproto_buffer_new(conn);
+		if (conn->active_obuf == NULL)
+			return NULL;
+	}
+	return &conn->active_obuf->obuf;
+}
+
+extern "C" struct obuf *
+call_request_obuf(struct call_request *request)
+{
+	struct iproto_msg *msg =
+		container_of(request, struct iproto_msg, call_request);
+	return iproto_connection_active_obuf(msg->connection);
+}
+
+/**
+ * Reset active obufs of all connections which wrote someting
+ * during the current tx event loop. And reset global list of
+ * buffers to send to iproto thread.
+ */
+static void
+tx_reset_batch()
+{
+	assert(cord() == tx_cord);
+	struct iproto_buffer *next;
+	rlist_foreach_entry(next, buffers_to_iproto, in_batch) {
+		assert(next == next->connection->active_obuf);
+		next->connection->active_obuf = NULL;
+	}
+	buffers_to_iproto = NULL;
 }
 
 /**
@@ -495,7 +634,7 @@ iproto_connection_close(struct iproto_connection *con)
 		 * parsed data is processed.  It's important this
 		 * is done only once.
 		 */
-		con->iobuf[0]->in.wpos -= con->parse_size;
+		con->active_ibuf->wpos -= con->parse_size;
 	}
 	/*
 	 * If the connection has no outstanding requests in the
@@ -513,7 +652,7 @@ iproto_connection_close(struct iproto_connection *con)
 		assert(con->disconnect != NULL);
 		struct iproto_msg *msg = con->disconnect;
 		con->disconnect = NULL;
-		cpipe_push(&tx_pipe, msg);
+		cpipe_push(&tx_pipe, &msg->request_msg);
 	}
 	rlist_del(&con->in_stop_list);
 }
@@ -521,7 +660,7 @@ iproto_connection_close(struct iproto_connection *con)
 /**
  * If there is no space for reading input, we can do one of the
  * following:
- * - try to get a new iobuf, so that it can fit the request.
+ * - try to get a new ibuf, so that it can fit the request.
  *   Always getting a new input buffer when there is no space
  *   makes the instance susceptible to input-flood attacks.
  *   Therefore, at most 2 iobufs are used in a single connection,
@@ -532,82 +671,70 @@ iproto_connection_close(struct iproto_connection *con)
  *   the previous strategy. It is only safe to stop input if it
  *   is known that there is output. In this case input event
  *   flow will be resumed when all replies to previous requests
- *   are sent, in iproto_connection_gc_iobuf(). Since there are two
- *   buffers, the input is only stopped when both of them
- *   are fully used up.
+ *   are sent. Since there are two buffers, the input is only
+ *   stopped when both of them are fully used up.
  *
- * To make this strategy work, each iobuf in use must fit at
- * least one request. Otherwise, iobuf[1] may end
- * up having no data to flush, while iobuf[0] is too small to
+ * To make this strategy work, each ibuf in use must fit at
+ * least one request. Otherwise, ibuf != active_ibuf may end
+ * up having no data to flush, while active_ibuf is too small to
  * fit a big incoming request.
  */
-static struct iobuf *
-iproto_connection_input_iobuf(struct iproto_connection *con)
+static struct ibuf *
+iproto_connection_input_ibuf(struct iproto_connection *con)
 {
-	struct iobuf *oldbuf = con->iobuf[0];
+	struct ibuf *oldbuf = con->active_ibuf;
 
 	size_t to_read = 3; /* Smallest possible valid request. */
 
 	/* The type code is checked in iproto_enqueue_batch() */
 	if (con->parse_size) {
-		const char *pos = oldbuf->in.wpos - con->parse_size;
-		if (mp_check_uint(pos, oldbuf->in.wpos) <= 0)
+		const char *pos = oldbuf->wpos - con->parse_size;
+		if (mp_check_uint(pos, oldbuf->wpos) <= 0)
 			to_read = mp_decode_uint(&pos);
 	}
 
-	if (ibuf_unused(&oldbuf->in) >= to_read)
-		return oldbuf;
-
 	/**
 	 * Reuse the buffer if:
-	 * - all requests are processed (in only has unparsed
-	 *   content, and out is empty, so we will not bloat
-	 *   output by reusing input
-	 * - we received a large packet, so we need to
-	 *   extend input buffer size to store a single large
-	 *   packet. In this case we need to realloc the input
-	 *   buffer, simply falling through to the subsequent
-	 *   branches will not make the buffer larger.
+	 * - it has enough space to fit new data;
+	 * - it contains only unparsed data. In such a case it
+	 *   must fit a new request, else the request can not be
+	 *   read in second buffer too.
 	 */
-	if (ibuf_used(&oldbuf->in) == con->parse_size &&
-	    (ibuf_pos(&oldbuf->in) == con->parse_size ||
-	     obuf_size(&oldbuf->out) == 0)) {
-		ibuf_reserve_xc(&oldbuf->in, to_read);
+	if (ibuf_unused(oldbuf) >= to_read)
+		return oldbuf;
+	if (oldbuf->wpos == oldbuf->buf + con->parse_size) {
+		ibuf_reserve_xc(oldbuf, to_read);
 		return oldbuf;
 	}
 
-	if (! iobuf_is_idle(con->iobuf[1])) {
+	struct ibuf *newbuf = iproto_connection_next_ibuf(con);
+	if (ibuf_used(newbuf) != 0) {
 		/*
 		 * Wait until the second buffer is flushed
 		 * and becomes available for reuse.
 		 */
 		return NULL;
 	}
-	struct iobuf *newbuf = con->iobuf[1];
 
-	ibuf_reserve_xc(&newbuf->in, to_read + con->parse_size);
+	ibuf_reserve_xc(newbuf, to_read + con->parse_size);
 	/*
 	 * Discard unparsed data in the old buffer, otherwise it
 	 * won't be recycled when all parsed requests are processed.
 	 */
-	oldbuf->in.wpos -= con->parse_size;
+	oldbuf->wpos -= con->parse_size;
 	if (con->parse_size != 0) {
 		/* Move the cached request prefix to the new buffer. */
-		memcpy(newbuf->in.rpos, oldbuf->in.wpos, con->parse_size);
-		newbuf->in.wpos += con->parse_size;
+		memcpy(newbuf->rpos, oldbuf->wpos, con->parse_size);
+		newbuf->wpos += con->parse_size;
 		/*
 		 * We made ibuf idle. If obuf was already idle it makes the whole
 		 * iobuf idle, time to trim buffers.
 		 */
-		if (iobuf_is_idle(oldbuf))
-			iobuf_reset_mt(oldbuf);
+		if (ibuf_used(oldbuf) == 0)
+			ibuf_reset_mt(oldbuf);
 	}
-	/*
-	 * Rotate buffers. Not strictly necessary, but
-	 * helps preserve response order.
-	 */
-	con->iobuf[1] = oldbuf;
-	con->iobuf[0] = newbuf;
+	/* Rotate ibufs. */
+	con->active_ibuf = newbuf;
 	return newbuf;
 }
 
@@ -634,25 +761,25 @@ iproto_decode_msg(struct iproto_msg *msg, const char **pos, const char *reqend,
 		xrow_decode_dml_xc(&msg->header, &msg->dml_request,
 				   dml_request_key_map(type));
 		assert(type < sizeof(dml_route)/sizeof(*dml_route));
-		cmsg_init(msg, dml_route[type]);
+		cmsg_init(&msg->request_msg, dml_route[type]);
 		break;
 	case IPROTO_CALL_16:
 	case IPROTO_CALL:
 	case IPROTO_EVAL:
 		xrow_decode_call_xc(&msg->header, &msg->call_request);
-		cmsg_init(msg, misc_route);
+		cmsg_init(&msg->request_msg, misc_route);
 		break;
 	case IPROTO_PING:
-		cmsg_init(msg, misc_route);
+		cmsg_init(&msg->request_msg, misc_route);
 		break;
 	case IPROTO_JOIN:
 	case IPROTO_SUBSCRIBE:
-		cmsg_init(msg, sync_route);
+		cmsg_init(&msg->request_msg, sync_route);
 		*stop_input = true;
 		break;
 	case IPROTO_AUTH:
 		xrow_decode_auth_xc(&msg->header, &msg->auth_request);
-		cmsg_init(msg, misc_route);
+		cmsg_init(&msg->request_msg, misc_route);
 		break;
 	default:
 		tnt_raise(ClientError, ER_UNKNOWN_REQUEST_TYPE,
@@ -668,6 +795,7 @@ iproto_enqueue_batch(struct iproto_connection *con, struct ibuf *in)
 {
 	int n_requests = 0;
 	bool stop_input = false;
+	struct iproto_msg *first_msg = NULL;
 	while (con->parse_size && stop_input == false) {
 		const char *reqstart = in->wpos - con->parse_size;
 		const char *pos = reqstart;
@@ -683,7 +811,7 @@ iproto_enqueue_batch(struct iproto_connection *con, struct ibuf *in)
 		if (reqend > in->wpos)
 			break;
 		struct iproto_msg *msg = iproto_msg_new(con);
-		msg->iobuf = con->iobuf[0];
+		msg->ibuf = in;
 		auto guard = make_scoped_guard([=] { iproto_msg_delete(msg); });
 
 		msg->len = reqend - reqstart; /* total request length */
@@ -694,28 +822,21 @@ iproto_enqueue_batch(struct iproto_connection *con, struct ibuf *in)
 			 * This can't throw, but should not be
 			 * done in case of exception.
 			 */
-			cpipe_push_input(&tx_pipe, msg);
+			cpipe_push_input(&tx_pipe, &msg->request_msg);
 			guard.is_active = false;
 			n_requests++;
+			if (first_msg == NULL)
+				first_msg = msg;
 		} catch (Exception *e) {
-			/*
-			 * Do not close connection if we failed to
-			 * decode a request, as we have enough info
-			 * to proceed to the next one.
-			 */
-			struct obuf *out = &msg->iobuf->out;
 			/*
 			 * Advance read position right away: the
 			 * message is so no need to hold the input
 			 * buffer.
 			 */
 			in->rpos += msg->len;
-			iproto_reply_error(out, e, msg->header.sync,
-					   ::schema_version);
-			out->wend = obuf_create_svp(out);
-			if (!ev_is_active(&con->output))
-				ev_feed_event(con->loop, &con->output, EV_WRITE);
 			e->log();
+			iproto_write_error_blocking(con->input.fd, e,
+						    msg->header.sync);
 		}
 
 		/* Request is parsed */
@@ -760,6 +881,12 @@ iproto_enqueue_batch(struct iproto_connection *con, struct ibuf *in)
 		 */
 		ev_feed_event(con->loop, &con->input, EV_READ);
 	}
+	/*
+	 * Send flushed buffers to tx thread with the first
+	 * client request of the batch.
+	 */
+	if (first_msg != NULL)
+		rlist_splice(&first_msg->flushed_buffers, &buffers_to_tx);
 	cpipe_flush_input(&tx_pipe);
 }
 
@@ -795,13 +922,11 @@ iproto_connection_on_input(ev_loop *loop, struct ev_io *watcher,
 
 	try {
 		/* Ensure we have sufficient space for the next round.  */
-		struct iobuf *iobuf = iproto_connection_input_iobuf(con);
-		if (iobuf == NULL) {
+		struct ibuf *in = iproto_connection_input_ibuf(con);
+		if (in == NULL) {
 			ev_io_stop(loop, &con->input);
 			return;
 		}
-
-		struct ibuf *in = &iobuf->in;
 		/* Read input. */
 		int nrd = sio_read(fd, in->wpos, ibuf_unused(in));
 		if (nrd < 0) {                  /* Socket is not ready. */
@@ -822,66 +947,32 @@ iproto_connection_on_input(ev_loop *loop, struct ev_io *watcher,
 		iproto_enqueue_batch(con, in);
 	} catch (Exception *e) {
 		/* Best effort at sending the error message to the client. */
-		iproto_write_error_blocking(fd, e);
+		iproto_write_error_blocking(fd, e, 0);
 		e->log();
 		iproto_connection_close(con);
 	}
 }
 
-/** Get the iobuf which is currently being flushed. */
-static inline struct iobuf *
-iproto_connection_output_iobuf(struct iproto_connection *con)
-{
-	if (obuf_used(&con->iobuf[1]->out) > 0)
-		return con->iobuf[1];
-	/*
-	 * Don't try to write from a newer buffer if an older one
-	 * exists: in case of a partial write of a newer buffer,
-	 * the client may end up getting a salad of different
-	 * pieces of replies from both buffers.
-	 */
-	if (ibuf_used(&con->iobuf[1]->in) == 0 &&
-	    obuf_used(&con->iobuf[0]->out) > 0)
-		return con->iobuf[0];
-	return NULL;
-}
-
 /** writev() to the socket and handle the result. */
-
 static int
-iproto_flush(struct iobuf *iobuf, struct iproto_connection *con)
+iproto_flush(struct obuf *obuf, struct iproto_connection *con)
 {
-	int fd = con->output.fd;
-	struct obuf_svp *begin = &iobuf->out.wpos;
-	struct obuf_svp *end = &iobuf->out.wend;
+	struct obuf_svp *begin = &obuf->wpos;
+	struct obuf_svp *end = &obuf->wend;
 	assert(begin->used < end->used);
 	struct iovec iov[SMALL_OBUF_IOV_MAX+1];
-	struct iovec *src = iobuf->out.iov;
 	int iovcnt = end->pos - begin->pos + 1;
-	/*
-	 * iov[i].iov_len may be concurrently modified in tx thread,
-	 * but only for the last position.
-	 */
-	memcpy(iov, src + begin->pos, iovcnt * sizeof(struct iovec));
+	memcpy(iov, obuf->iov + begin->pos, iovcnt * sizeof(struct iovec));
 	sio_add_to_iov(iov, -begin->iov_len);
-	/* *Overwrite* iov_len of the last pos as it may be garbage. */
-	iov[iovcnt-1].iov_len = end->iov_len - begin->iov_len * (iovcnt == 1);
 
-	ssize_t nwr = sio_writev(fd, iov, iovcnt);
+	ssize_t nwr = sio_writev(con->output.fd, iov, iovcnt);
 
 	/* Count statistics */
 	rmean_collect(rmean_net, IPROTO_SENT, nwr);
 	if (nwr > 0) {
 		if (begin->used + nwr == end->used) {
-			if (ibuf_used(&iobuf->in) == 0) {
-				/* Quickly recycle the buffer if it's idle. */
-				assert(end->used == obuf_size(&iobuf->out));
-				/* resets wpos and wpend to zero pos */
-				iobuf_reset_mt(iobuf);
-			} else { /* Avoid assignment reordering. */
-				/* Advance write position. */
-				*begin = *end;
-			}
+			/* Advance write position. */
+			*begin = *end;
 			return 0;
 		}
 		size_t offset = 0;
@@ -902,23 +993,88 @@ iproto_connection_on_output(ev_loop *loop, struct ev_io *watcher,
 	struct iproto_connection *con = (struct iproto_connection *) watcher->data;
 
 	try {
-		struct iobuf *iobuf;
-		while ((iobuf = iproto_connection_output_iobuf(con))) {
-			if (iproto_flush(iobuf, con) < 0) {
+		struct iproto_buffer *next, *tmp;
+		rlist_foreach_entry_safe(next, &con->buffers_to_flush,
+					 in_batch, tmp) {
+			if (iproto_flush(&next->obuf, con) != 0) {
 				ev_io_start(loop, &con->output);
 				return;
 			}
-			if (! ev_is_active(&con->input) &&
-			    rlist_empty(&con->in_stop_list)) {
-				ev_feed_event(loop, &con->input, EV_READ);
-			}
+			/*
+			 * Move flushed buffers to the global list
+			 * to send them back to tx with a next
+			 * client request.
+			 */
+			rlist_move_tail_entry(&buffers_to_tx, next, in_batch);
 		}
+		iproto_connection_resume_input(con);
 		if (ev_is_active(&con->output))
 			ev_io_stop(con->loop, &con->output);
 	} catch (Exception *e) {
 		e->log();
 		iproto_connection_close(con);
 	}
+}
+
+/**
+ * Spread buffers received from tx to their connection buffer
+ * queues.
+ */
+static void
+net_flush_obufs(struct rlist *batch)
+{
+	struct iproto_buffer *next, *tmp;
+	rlist_foreach_entry_safe(next, batch, in_batch, tmp) {
+		struct iproto_connection *conn = next->connection;
+		rlist_move_tail_entry(&conn->buffers_to_flush, next, in_batch);
+		if (evio_has_fd(&conn->output) && !ev_is_active(&conn->output))
+			ev_feed_event(conn->loop, &conn->output, EV_WRITE);
+	}
+}
+
+/**
+ * Wait end of a current event loop iteration and prepare obufs
+ * batch for sending to tx thread.
+ */
+static inline void
+tx_schedule_batch_dump()
+{
+	assert(cord() == tx_cord);
+	assert(buffers_to_iproto != NULL);
+	fiber_reschedule();
+	tx_reset_batch();
+}
+
+/**
+ * Update end position of the active obuf of a current connection.
+ * Current connection is defined in @a request->connection.
+ * If the current obuf is first in a batch of a current event loop
+ * iteration, then save it as head of a batch and wait until
+ * event loop iteration end. At the end prepare current batch to
+ * be sent to iproto.
+ * @param request Request to get connection. If the obuf is first
+ *        in the batch, then @a request becames a transport for
+ *        the batch and stores its head in
+ *        iproto_msg.buffers_to_flush. This way allows to avoid
+ *        sending a special message to iproto thread with the
+ *        batch. We simply use existing message to deliver the
+ *        batch.
+ */
+static inline void
+tx_finish_response(struct iproto_msg *request)
+{
+	assert(cord() == tx_cord);
+	struct iproto_buffer *new_buffer = request->connection->active_obuf;
+	assert(new_buffer != NULL);
+	new_buffer->obuf.wend = obuf_create_svp(&new_buffer->obuf);
+	if (buffers_to_iproto == NULL) {
+		buffers_to_iproto = &request->buffers_to_flush;
+		rlist_add_tail_entry(buffers_to_iproto, new_buffer, in_batch);
+		tx_schedule_batch_dump();
+		return;
+	}
+	if (rlist_empty(&new_buffer->in_batch))
+		rlist_add_tail_entry(buffers_to_iproto, new_buffer, in_batch);
 }
 
 static int
@@ -936,40 +1092,49 @@ static void
 tx_process1(struct cmsg *m)
 {
 	struct iproto_msg *msg = (struct iproto_msg *) m;
-	struct obuf *out = &msg->iobuf->out;
-
+	struct obuf *out;
 	tx_fiber_init(msg->connection->session, msg->header.sync);
+	iproto_buffer_delete_list(&msg->flushed_buffers);
+
 	if (tx_check_schema(msg->header.schema_version))
 		goto error;
 
 	struct tuple *tuple;
 	struct obuf_svp svp;
-	if (box_process1(&msg->dml_request, &tuple) ||
-	    iproto_prepare_select(out, &svp))
+	if (box_process1(&msg->dml_request, &tuple) != 0)
 		goto error;
-	if (tuple && tuple_to_obuf(tuple, out))
+	out = iproto_connection_active_obuf(msg->connection);
+	if (out == NULL)
+		return;
+	if (iproto_prepare_select(out, &svp) != 0)
 		goto error;
+	if (tuple && tuple_to_obuf(tuple, out)) {
+		obuf_rollback_to_svp(out, &svp);
+		goto error;
+	}
 	iproto_reply_select(out, &svp, msg->header.sync, ::schema_version,
 			    tuple != 0);
-	msg->write_end = obuf_create_svp(out);
+	tx_finish_response(msg);
 	return;
 error:
+	out = iproto_connection_active_obuf(msg->connection);
+	if (out == NULL)
+		return;
 	iproto_reply_error(out, diag_last_error(&fiber()->diag),
 			   msg->header.sync, ::schema_version);
-	msg->write_end = obuf_create_svp(out);
+	tx_finish_response(msg);
 }
 
 static void
 tx_process_select(struct cmsg *m)
 {
 	struct iproto_msg *msg = (struct iproto_msg *) m;
-	struct obuf *out = &msg->iobuf->out;
+	struct obuf *out;
 	struct obuf_svp svp;
 	struct port port;
-	int rc;
 	struct request *req = &msg->dml_request;
-
 	tx_fiber_init(msg->connection->session, msg->header.sync);
+	iproto_buffer_delete_list(&msg->flushed_buffers);
 
 	port_create(&port);
 	auto port_guard = make_scoped_guard([&](){ port_destroy(&port); });
@@ -977,11 +1142,13 @@ tx_process_select(struct cmsg *m)
 	if (tx_check_schema(msg->header.schema_version))
 		goto error;
 
-	rc = box_select(&port,
-			req->space_id, req->index_id,
-			req->iterator, req->offset, req->limit,
-			req->key, req->key_end);
-	if (rc < 0 || iproto_prepare_select(out, &svp) != 0)
+	if (box_select(&port, req->space_id, req->index_id, req->iterator,
+		       req->offset, req->limit, req->key, req->key_end) != 0)
+		goto error;
+	out = iproto_connection_active_obuf(msg->connection);
+	if (out == NULL)
+		return;
+	if (iproto_prepare_select(out, &svp) != 0)
 		goto error;
 	if (port_dump(&port, out) != 0) {
 		/* Discard the prepared select. */
@@ -990,21 +1157,25 @@ tx_process_select(struct cmsg *m)
 	}
 	iproto_reply_select(out, &svp, msg->header.sync, ::schema_version,
 			    port.size);
-	msg->write_end = obuf_create_svp(out);
+	tx_finish_response(msg);
 	return;
 error:
+	out = iproto_connection_active_obuf(msg->connection);
+	if (out == NULL)
+		return;
 	iproto_reply_error(out, diag_last_error(&fiber()->diag),
 			   msg->header.sync, ::schema_version);
-	msg->write_end = obuf_create_svp(out);
+	tx_finish_response(msg);
 }
 
 static void
 tx_process_misc(struct cmsg *m)
 {
 	struct iproto_msg *msg = (struct iproto_msg *) m;
-	struct obuf *out = &msg->iobuf->out;
-
+	struct iproto_connection *conn = msg->connection;
+	struct obuf *out;
 	tx_fiber_init(msg->connection->session, msg->header.sync);
+	iproto_buffer_delete_list(&msg->flushed_buffers);
 
 	if (tx_check_schema(msg->header.schema_version))
 		goto error;
@@ -1013,15 +1184,21 @@ tx_process_misc(struct cmsg *m)
 		switch (msg->header.type) {
 		case IPROTO_CALL:
 		case IPROTO_CALL_16:
-			box_process_call(&msg->call_request, out);
+			box_process_call(&msg->call_request);
 			break;
 		case IPROTO_EVAL:
-			box_process_eval(&msg->call_request, out);
+			box_process_eval(&msg->call_request);
 			break;
 		case IPROTO_AUTH:
+			out = iproto_connection_active_obuf(conn);
+			if (out == NULL)
+				return;
 			box_process_auth(&msg->auth_request, out);
 			break;
 		case IPROTO_PING:
+			out = iproto_connection_active_obuf(conn);
+			if (out == NULL)
+				return;
 			iproto_reply_ok_xc(out, msg->header.sync,
 					   ::schema_version);
 			break;
@@ -1029,15 +1206,17 @@ tx_process_misc(struct cmsg *m)
 			unreachable();
 		}
 	} catch (Exception *e) {
-		iproto_reply_error(out, diag_last_error(&fiber()->diag),
-				   msg->header.sync, ::schema_version);
+		goto error;
 	}
-	msg->write_end = obuf_create_svp(out);
+	tx_finish_response(msg);
 	return;
 error:
+	out = iproto_connection_active_obuf(conn);
+	if (out == NULL)
+		return;
 	iproto_reply_error(out, diag_last_error(&fiber()->diag),
 			   msg->header.sync, ::schema_version);
-	msg->write_end = obuf_create_svp(out);
+	tx_finish_response(msg);
 }
 
 static void
@@ -1045,6 +1224,7 @@ tx_process_join_subscribe(struct cmsg *m)
 {
 	struct iproto_msg *msg = (struct iproto_msg *) m;
 	struct iproto_connection *con = msg->connection;
+	iproto_buffer_delete_list(&msg->flushed_buffers);
 
 	tx_fiber_init(con->session, msg->header.sync);
 
@@ -1073,7 +1253,7 @@ tx_process_join_subscribe(struct cmsg *m)
 	} catch (SocketError *e) {
 		throw; /* don't write error response to prevent SIGPIPE */
 	} catch (Exception *e) {
-		iproto_write_error_blocking(con->input.fd, e);
+		iproto_write_error_blocking(con->input.fd, e, msg->header.sync);
 	}
 }
 
@@ -1082,17 +1262,14 @@ net_send_msg(struct cmsg *m)
 {
 	struct iproto_msg *msg = (struct iproto_msg *) m;
 	struct iproto_connection *con = msg->connection;
-	struct iobuf *iobuf = msg->iobuf;
+	struct ibuf *ibuf = msg->ibuf;
 	/* Discard request (see iproto_enqueue_batch()) */
-	iobuf->in.rpos += msg->len;
-	iobuf->out.wend = msg->write_end;
+	ibuf->rpos += msg->len;
+	net_flush_obufs(&msg->buffers_to_flush);
 
-	if (evio_has_fd(&con->output)) {
-		if (! ev_is_active(&con->output))
-			ev_feed_event(con->loop, &con->output, EV_WRITE);
-	} else if (iproto_connection_is_idle(con)) {
+	if (!evio_has_fd(&con->output) && iproto_connection_is_idle(con))
 		iproto_connection_close(con);
-	}
+	iproto_connection_resume_input(con);
 	iproto_msg_delete(msg);
 }
 
@@ -1101,9 +1278,9 @@ net_end_join_subscribe(struct cmsg *m)
 {
 	struct iproto_msg *msg = (struct iproto_msg *) m;
 	struct iproto_connection *con = msg->connection;
-	struct iobuf *iobuf = msg->iobuf;
+	struct ibuf *ibuf = msg->ibuf;
 
-	iobuf->in.rpos += msg->len;
+	ibuf->rpos += msg->len;
 	iproto_msg_delete(msg);
 
 	assert(! ev_is_active(&con->input));
@@ -1111,7 +1288,7 @@ net_end_join_subscribe(struct cmsg *m)
 	 * Enqueue any messages if they are in the readahead
 	 * queue. Will simply start input otherwise.
 	 */
-	iproto_enqueue_batch(con, &iobuf->in);
+	iproto_enqueue_batch(con, ibuf);
 }
 
 /**
@@ -1124,13 +1301,15 @@ tx_process_connect(struct cmsg *m)
 {
 	struct iproto_msg *msg = (struct iproto_msg *) m;
 	struct iproto_connection *con = msg->connection;
-	struct obuf *out = &msg->iobuf->out;
+	struct obuf *out = iproto_connection_active_obuf(con);
+	if (out == NULL)
+		return;
 	try {              /* connect. */
 		con->session = session_create(con->input.fd, SESSION_TYPE_BINARY);
 		if (con->session == NULL)
 			diag_raise();
 		tx_fiber_init(con->session, 0);
-		static __thread char greeting[IPROTO_GREETING_SIZE];
+		char greeting[IPROTO_GREETING_SIZE];
 		/* TODO: dirty read from tx thread */
 		struct tt_uuid uuid = INSTANCE_UUID;
 		greeting_encode(greeting, tarantool_version_id(),
@@ -1140,7 +1319,8 @@ tx_process_connect(struct cmsg *m)
 			if (session_run_on_connect_triggers(con->session) != 0)
 				diag_raise();
 		}
-		msg->write_end = obuf_create_svp(out);
+		con->active_obuf->obuf.wend =
+			obuf_create_svp(&con->active_obuf->obuf);
 	} catch (Exception *e) {
 		/* zero sync for connect errors */
 		iproto_reply_error(out, e, 0, ::schema_version);
@@ -1157,8 +1337,8 @@ net_send_greeting(struct cmsg *m)
 {
 	struct iproto_msg *msg = (struct iproto_msg *) m;
 	struct iproto_connection *con = msg->connection;
+	struct obuf *out = &con->active_obuf->obuf;
 	if (msg->close_connection) {
-		struct obuf *out = &msg->iobuf->out;
 		try {
 			int64_t nwr = sio_writev(con->output.fd, out->iov,
 						 obuf_iovcnt(out));
@@ -1173,7 +1353,9 @@ net_send_greeting(struct cmsg *m)
 		iproto_msg_delete(msg);
 		return;
 	}
-	con->iobuf[0]->out.wend = msg->write_end;
+	rlist_move_tail_entry(&con->buffers_to_flush,
+			      con->active_obuf, in_batch);
+	con->active_obuf = NULL;
 	/*
 	 * Connect is synchronous, so no one could have been
 	 * messing up with the connection while it was in
@@ -1212,10 +1394,10 @@ iproto_on_accept(struct evio_service * /* service */, int fd,
 	 * use, all stored in just a few blocks of the memory pool.
 	 */
 	struct iproto_msg *msg = iproto_msg_new(con);
-	cmsg_init(msg, connect_route);
-	msg->iobuf = con->iobuf[0];
+	cmsg_init(&msg->request_msg, connect_route);
+	msg->ibuf = con->active_ibuf;
 	msg->close_connection = false;
-	cpipe_push(&tx_pipe, msg);
+	cpipe_push(&tx_pipe, &msg->request_msg);
 }
 
 static struct evio_service binary; /* iproto binary listener */
@@ -1228,7 +1410,6 @@ static int
 net_cord_f(va_list /* ap */)
 {
 	/* Got to be called in every thread using iobuf */
-	iobuf_init();
 	mempool_create(&iproto_msg_pool, &cord()->slabc,
 		       sizeof(struct iproto_msg));
 	mempool_create(&iproto_connection_pool, &cord()->slabc,

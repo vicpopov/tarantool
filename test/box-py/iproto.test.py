@@ -407,6 +407,16 @@ resp = test_request(header, body)
 print "Sync: ", resp['header'][IPROTO_SYNC]
 print "Retcode: ", resp['body'][IPROTO_DATA]
 
+#
+# gh-946: try to pack batch of responses in one obuf
+#
+request1 = RequestSelect(c, 280, 0, [], 0, 10000, 0)
+request2 = RequestSelect(c, 280, 0, [], 0, 10000, 0)
+request3 = RequestSelect(c, 280, 0, [], 0, 10000, 0)
+s.send(bytes(request1) + bytes(request2) + bytes(request3))
+Response(c, c._read_response())
+Response(c, c._read_response())
+Response(c, c._read_response())
 c.close()
 
 admin("box.schema.user.revoke('guest', 'read,write,execute', 'universe')")

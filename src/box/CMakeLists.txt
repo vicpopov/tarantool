@@ -44,6 +44,7 @@ target_link_libraries(xlog core crc32 ${ZSTD_LIBRARIES})
 
 add_library(box STATIC
     iproto.cc
+    iproto_buffer.c
     error.cc
     xrow_io.cc
     tuple_convert.c

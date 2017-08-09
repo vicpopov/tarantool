@@ -69,13 +69,14 @@ access_check_func(const char *name, uint32_t name_len)
 }
 
 static int
-box_c_call(struct func *func, struct call_request *request, struct obuf *out)
+box_c_call(struct func *func, struct call_request *request)
 {
 	assert(func != NULL && func->def->language == FUNC_LANGUAGE_C);
 
 	/* Create a call context */
 	struct port port;
 	port_create(&port);
+	struct obuf *out;
 	auto port_guard = make_scoped_guard([&](){ port_destroy(&port); });
 	box_function_ctx_t ctx = { &port };
 
@@ -95,6 +96,9 @@ box_c_call(struct func *func, struct call_request *request, struct obuf *out)
 
 	/* Push results to obuf */
 	struct obuf_svp svp;
+	out = call_request_obuf(request);
+	if (out == NULL)
+		goto error;
 	if (iproto_prepare_select(out, &svp) != 0)
 		goto error;
 
@@ -129,7 +133,7 @@ error:
 }
 
 void
-box_process_call(struct call_request *request, struct obuf *out)
+box_process_call(struct call_request *request)
 {
 	rmean_collect(rmean_box, IPROTO_CALL, 1);
 	/**
@@ -170,9 +174,9 @@ box_process_call(struct call_request *request, struct obuf *out)
 
 	int rc;
 	if (func && func->def->language == FUNC_LANGUAGE_C) {
-		rc = box_c_call(func, request, out);
+		rc = box_c_call(func, request);
 	} else {
-		rc = box_lua_call(request, out);
+		rc = box_lua_call(request);
 	}
 	/* Restore the original user */
 	if (orig_credentials)
@@ -192,12 +196,12 @@ box_process_call(struct call_request *request, struct obuf *out)
 }
 
 void
-box_process_eval(struct call_request *request, struct obuf *out)
+box_process_eval(struct call_request *request)
 {
 	rmean_collect(rmean_box, IPROTO_EVAL, 1);
 	/* Check permissions */
 	access_check_universe(PRIV_X);
-	if (box_lua_eval(request, out) != 0) {
+	if (box_lua_eval(request) != 0) {
 		txn_rollback();
 		diag_raise();
 	}

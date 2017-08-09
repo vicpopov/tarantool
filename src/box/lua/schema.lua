@@ -84,6 +84,8 @@ ffi.cdef[[
                const char *key, const char *key_end);
     void password_prepare(const char *password, int len,
                           char *out, int out_len);
+
+    void box_func_reload(const char *name);
 ]]
 
 local function user_or_role_resolve(user)
@@ -1278,6 +1280,10 @@ function box.schema.func.exists(name_or_id)
         tuple = _func:get{name_or_id}
     end
     return tuple ~= nil
+end
+
+box.schema.func.reload = function(name)
+    builtin.box_func_reload(name)
 end
 
 box.schema.user = {}

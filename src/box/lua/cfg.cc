@@ -37,6 +37,7 @@
 #include "lua/utils.h"
 
 #include "box/box.h"
+#include "libeio/eio.h"
 
 extern "C" {
 	#include <lua.h>
@@ -175,6 +176,15 @@ lbox_cfg_update_vinyl_options(struct lua_State *L)
 	return 0;
 }
 
+static int
+lbox_cfg_set_eio_parallel(struct lua_State *L)
+{
+	(void) L;
+	eio_set_min_parallel(cfg_geti("eio_parallel"));
+	eio_set_max_parallel(cfg_geti("eio_parallel"));
+	return 0;
+}
+
 void
 box_lua_cfg_init(struct lua_State *L)
 {
@@ -183,8 +193,8 @@ box_lua_cfg_init(struct lua_State *L)
 		{"cfg_load", lbox_cfg_load},
 		{"cfg_set_listen", lbox_cfg_set_listen},
 		{"cfg_set_replication", lbox_cfg_set_replication},
+		{"cfg_set_eio_parallel", lbox_cfg_set_eio_parallel},
 		/* Backward compatibility */
-		{"cfg_set_replication", lbox_cfg_set_replication},
 		{"cfg_set_log_level", lbox_cfg_set_log_level},
 		{"cfg_set_readahead", lbox_cfg_set_readahead},
 		{"cfg_set_io_collect_interval", lbox_cfg_set_io_collect_interval},

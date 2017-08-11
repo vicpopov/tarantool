@@ -57,6 +57,7 @@
 #include "iproto_constants.h"
 #include "rmean.h"
 #include "iproto_buffer.h"
+#include "errinj.h"
 
 /* The number of iproto messages in flight */
 enum { IPROTO_MSG_MAX = 768 };
@@ -628,6 +629,11 @@ call_request_obuf(struct call_request *request)
 extern "C" void
 call_request_discard_input(struct call_request *request)
 {
+#ifndef NDEBUG
+	struct errinj *inj = errinj(ERRINJ_DELAY_NET_GC_IBUF, ERRINJ_BOOL);
+	if (inj != NULL)
+		while(inj->bparam) fiber_sleep(0.00001);
+#endif
 	struct iproto_msg *msg =
 		container_of(request, struct iproto_msg, call_request);
 	cmsg_init(&msg->discard_ibuf_msg, &ibuf_gc_route);
@@ -1013,7 +1019,22 @@ iproto_flush(struct obuf *obuf, struct iproto_connection *con)
 	memcpy(iov, obuf->iov + begin->pos, iovcnt * sizeof(struct iovec));
 	sio_add_to_iov(iov, -begin->iov_len);
 
+#ifndef NDEBUG
+	struct errinj *inj = errinj(ERRINJ_SIOWRITEV_PARTIAL, ERRINJ_BOOL);
+	size_t old_len = 0;
+	if (inj != NULL && inj->bparam) {
+		old_len = iov[0].iov_len;
+		if (iovcnt > 1)
+			iovcnt -= 1;
+		else
+			iov[0].iov_len /= 2;
+       }
+#endif
 	ssize_t nwr = sio_writev(con->output.fd, iov, iovcnt);
+#ifndef NDEBUG
+	if (old_len != 0 && iovcnt == 1)
+		iov[0].iov_len = old_len;
+#endif
 
 	/* Count statistics */
 	rmean_collect(rmean_net, IPROTO_SENT, nwr);
@@ -1045,6 +1066,15 @@ iproto_connection_on_output(ev_loop *loop, struct ev_io *watcher,
 		rlist_foreach_entry_safe(next, &con->buffers_to_flush,
 					 in_batch, tmp) {
 			if (iproto_flush(&next->obuf, con) != 0) {
+#ifndef NDEBUG
+				struct errinj *inj =
+					errinj(ERRINJ_SIOWRITEV_PARTIAL,
+					       ERRINJ_BOOL);
+				if (inj != NULL && inj->bparam) {
+					inj->bparam = false;
+					break;
+				}
+#endif
 				ev_io_start(loop, &con->output);
 				return;
 			}

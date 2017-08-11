@@ -103,6 +103,9 @@ struct errinj {
 	_(ERRINJ_VYRUN_INDEX_GARBAGE, ERRINJ_BOOL, {.bparam = false}) \
 	_(ERRINJ_VYRUN_DATA_READ, ERRINJ_BOOL, {.bparam = false}) \
 	_(ERRINJ_BUILD_SECONDARY, ERRINJ_INT, {.iparam = -1}) \
+	_(ERRINJ_SIOWRITEV_PARTIAL, ERRINJ_BOOL, {.bparam = false}) \
+	_(ERRINJ_DELAY_NET_GC_IBUF, ERRINJ_BOOL, {.bparam = false}) \
+
 
 ENUM0(errinj_id, ERRINJ_LIST);
 extern struct errinj errinjs[];

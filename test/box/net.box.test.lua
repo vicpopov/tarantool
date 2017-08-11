@@ -786,5 +786,28 @@ fibers = {}
 for i = 1, 10 do table.insert(fibers, fiber.create(function() c:call('long_call', {longs1}) end)) end
 c:call('normal_call', {longs1}) -- hangs before 946 fix
 
+-- Check that response is not corrupted if it is partially written
+-- and newer response becames ready to flush.
+errinj = box.error.injection
+s = box.schema.space.create('test')
+i = s:create_index('pk')
+normal_ret = nil
+long_ret = nil
+function normal_call(arg) return 'ok' end
+function long_insert(arg) return s:replace{1} end
+
+errinj.set("ERRINJ_WAL_DELAY", true)
+errinj.set("ERRINJ_DELAY_NET_GC_IBUF", true)
+f1 = fiber.create(function() long_ret = c:call('long_insert', {longs2}) end)
+while f1:status() ~= 'suspended' do fiber.sleep(0) end
+errinj.set("ERRINJ_SIOWRITEV_PARTIAL", true)
+f2 = fiber.create(function() normal_ret = c:call('normal_call', {longs2}) end)
+while f2:status() ~= 'suspended' do fiber.sleep(0) end
+errinj.set("ERRINJ_DELAY_NET_GC_IBUF", false)
+errinj.set("ERRINJ_WAL_DELAY", false)
+normal_ret
+long_ret
+s:drop()
+
 c:close()
 box.schema.user.revoke('guest','read,write,execute','universe')

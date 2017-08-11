@@ -45,7 +45,7 @@ struct slab_arena;
 struct quota;
 
 /** Initialize tuple library */
-void
+int
 tuple_init(void);
 
 /** Cleanup tuple library */
@@ -449,6 +449,21 @@ tuple_extra(const struct tuple *tuple)
 	struct tuple_format *format = tuple_format(tuple);
 	return tuple_data(tuple) - tuple_format_meta_size(format);
 }
+
+/**
+ * Instantiate a new engine-independent tuple from raw MsgPack Array data
+ * using runtime arena. Use this function to create a standalone tuple
+ * from Lua or C procedures.
+ *
+ * \param format tuple format.
+ * \param data tuple data in MsgPack Array format ([field1, field2, ...]).
+ * \param end the end of \a data
+ * \retval tuple on success
+ * \retval NULL on out of memory
+ * \sa \code box.tuple.new(data) \endcode
+ */
+struct tuple *
+tuple_new(struct tuple_format *format, const char *data, const char *end);
 
 /**
  * Free the tuple of any engine.

@@ -65,7 +65,8 @@ struct iproto_buffer {
 	 * or iproto_msg.flushed_buffers
 	 * or iproto_msg.buffers_to_flush
 	 * or iproto_connection.buffers_to_flush
-	 * or buffers_to_tx list.
+	 * or buffers_to_tx list
+	 * or cached_buffers list.
 	 */
 	struct rlist in_batch;
 };

@@ -33,16 +33,29 @@
 #include "iproto_buffer.h"
 #include "iobuf.h"
 
+enum {
+	CACHED_BUFFERS_MAX = 10,
+};
+static int cached_buffers_count = 0;
+static RLIST_HEAD(cached_buffers);
+
 struct iproto_buffer *
 iproto_buffer_new(struct iproto_connection *conn)
 {
-	struct iproto_buffer *ret =
-		(struct iproto_buffer *) malloc(sizeof(*ret));
+	struct iproto_buffer *ret;
+	if (cached_buffers_count > 0) {
+		ret = rlist_shift_entry(&cached_buffers, struct iproto_buffer,
+					in_batch);
+		--cached_buffers_count;
+		goto finish;
+	}
+	ret = (struct iproto_buffer *) malloc(sizeof(*ret));
 	if (ret == NULL) {
 		diag_set(OutOfMemory, sizeof(*ret), "malloc", "ret");
 		return NULL;
 	}
 	obuf_create(&ret->obuf, cord_slab_cache(), iobuf_readahead);
+finish:
 	ret->connection = conn;
 	rlist_create(&ret->in_batch);
 	return ret;
@@ -51,6 +64,12 @@ iproto_buffer_new(struct iproto_connection *conn)
 void
 iproto_buffer_delete(struct iproto_buffer *buffer)
 {
+	if (cached_buffers_count < CACHED_BUFFERS_MAX) {
+		obuf_reset(&buffer->obuf);
+		rlist_add_tail_entry(&cached_buffers, buffer, in_batch);
+		++cached_buffers_count;
+		return;
+	}
 	obuf_destroy(&buffer->obuf);
 	free(buffer);
 }

@@ -1864,3 +1864,66 @@ box.schema.user.revoke('guest','read,write,execute','universe')
 space:drop()
 ---
 ...
+--
+-- gh-946: long call/eval block input.
+--
+-- Try 2 big requests to occupy both input buffers
+-- with one request.
+box.schema.user.grant('guest','read,write,execute','universe')
+---
+...
+box.cfg{ readahead=128 }
+---
+...
+c = net.connect(box.cfg.listen)
+---
+...
+function long_call(param) fiber.sleep(100000) return 'ok' end
+---
+...
+function normal_call(param) return 'fast_ok' end
+---
+...
+longs1 = string.rep('a', 9000)
+---
+...
+longs2 = string.rep(longs1, 5)
+---
+...
+longs3 = string.rep(longs2, 5)
+---
+...
+f1 = fiber.create(function() c:call('long_call', {longs1}) end)
+---
+...
+f2 = fiber.create(function() c:call('long_call', {longs2}) end)
+---
+...
+c:call('normal_call', {longs3}) -- hangs before 946 fix
+---
+- fast_ok
+...
+c:close()
+---
+...
+-- Try multiple little requests to occupy each input buffer with
+-- many requests.
+c = net.connect(box.cfg.listen)
+---
+...
+fibers = {}
+---
+...
+for i = 1, 10 do table.insert(fibers, fiber.create(function() c:call('long_call', {longs1}) end)) end
+---
+...
+c:call('normal_call', {longs1}) -- hangs before 946 fix
+---
+- fast_ok
+...
+c:close()
+---
+...
+box.schema.user.revoke('guest','read,write,execute','universe')
+---
+...

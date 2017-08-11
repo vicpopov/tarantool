@@ -38,8 +38,9 @@ struct box_function_ctx {
 };
 
 #ifdef __cplusplus
-extern "C"
+extern "C" {
 #endif
+
 /**
  * Get output buffer to write response on a specified request.
  * The buffer is valid until next yield.
@@ -50,6 +51,19 @@ extern "C"
  */
 struct obuf *
 call_request_obuf(struct call_request *request);
+
+/**
+ * Notify iproto thread, that input request data is not needed
+ * anymore. Iproto thread, received such message, can reuse
+ * request's ibuf for newer requests.
+ * @param request Request to discard data.
+ */
+void
+call_request_discard_input(struct call_request *request);
+
+#ifdef __cplusplus
+} /* extern "C" */
+#endif
 
 void
 box_process_call(struct call_request *request);

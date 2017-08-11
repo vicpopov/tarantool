@@ -278,6 +278,7 @@ execute_lua_call(lua_State *L)
 
 	for (uint32_t i = 0; i < arg_count; i++)
 		luamp_decode(L, luaL_msgpack_default, &args);
+	call_request_discard_input(request);
 	lua_call(L, arg_count + oc - 1, LUA_MULTRET);
 
 	/**
@@ -353,6 +354,7 @@ execute_lua_eval(lua_State *L)
 	for (uint32_t i = 0; i < arg_count; i++) {
 		luamp_decode(L, luaL_msgpack_default, &args);
 	}
+	call_request_discard_input(request);
 
 	/* Call compiled code */
 	lua_call(L, arg_count, LUA_MULTRET);

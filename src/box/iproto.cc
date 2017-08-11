@@ -74,6 +74,13 @@ struct iproto_msg
 	 * Message to deliver request data to tx thread and back.
 	 */
 	struct cmsg request_msg;
+	/**
+	 * Message to discard request data, stored in ibuf when it
+	 * is not needed anymore. Call and eval discard input data
+	 * before lua_call. It allows to reuse ibuf for newer
+	 * requests while call/eval is working.
+	 */
+	struct cmsg discard_ibuf_msg;
 	struct iproto_connection *connection;
 
 	/* --- Box msgs - actual requests for the transaction processor --- */
@@ -470,6 +477,22 @@ net_finish_disconnect(struct cmsg *m)
 	iproto_msg_delete(msg);
 }
 
+/**
+ * Discard the ibuffered data of the iproto msg.
+ * @param m iproto_msg.discard_ibuf_msg message.
+ */
+static inline void
+net_gc_ibuf(struct cmsg *m)
+{
+	struct iproto_msg *msg =
+		container_of(m, struct iproto_msg, discard_ibuf_msg);
+	/* Discard request (see iproto_enqueue_batch()). */
+	msg->ibuf->rpos += msg->len;
+	/* Do not discard twice in net_send_msg. */
+	msg->len = 0;
+	iproto_connection_resume_input(msg->connection);
+}
+
 static const struct cmsg_hop disconnect_route[] = {
 	{ tx_process_disconnect, &net_pipe },
 	{ net_finish_disconnect, NULL },
@@ -489,6 +512,8 @@ static const struct cmsg_hop process1_route[] = {
 	{ tx_process1, &net_pipe },
 	{ net_send_msg, NULL },
 };
+
+static const struct cmsg_hop ibuf_gc_route = { net_gc_ibuf, NULL };
 
 static const struct cmsg_hop *dml_route[IPROTO_TYPE_STAT_MAX] = {
 	NULL,                                   /* IPROTO_OK */
@@ -592,6 +617,29 @@ call_request_obuf(struct call_request *request)
 	struct iproto_msg *msg =
 		container_of(request, struct iproto_msg, call_request);
 	return iproto_connection_active_obuf(msg->connection);
+}
+
+/**
+ * Send message to iproto thread to discard input of a specified
+ * call request. @sa net_gc_ibuf().
+ * @param call_request Call request, pointer to
+ *        iproto_msg.call_request.
+ */
+extern "C" void
+call_request_discard_input(struct call_request *request)
+{
+	struct iproto_msg *msg =
+		container_of(request, struct iproto_msg, call_request);
+	cmsg_init(&msg->discard_ibuf_msg, &ibuf_gc_route);
+	cpipe_push(&net_pipe, &msg->discard_ibuf_msg);
+	cpipe_flush_input(&net_pipe);
+#ifndef NDEBUG
+	/* The following data is discarded in iproto thread. */
+	request->name = NULL;
+	request->expr = NULL;
+	request->args = NULL;
+	request->args_end = NULL;
+#endif
 }
 
 /**

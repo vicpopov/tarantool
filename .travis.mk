@@ -41,7 +41,7 @@ test_osx: deps_osx
 	ulimit -S -n 20480 || :
 	ulimit -n
 	make -j8
-	cd test && python test-run.py -j -1 unit/ app/ app-tap/ box/ box-tap/
+	cd test && python test-run.py -j -1
 
 coverage: deps_linux
 	sudo apt-get -q -y install lcov

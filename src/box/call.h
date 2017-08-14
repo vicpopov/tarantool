@@ -36,7 +36,7 @@
 #if defined(__cplusplus)
 extern "C" {
 #endif /* defined(__cplusplus) */
-void
+int
 box_func_reload(const char *name);
 
 #if defined(__cplusplus)

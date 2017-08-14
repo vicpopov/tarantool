@@ -293,24 +293,19 @@ module_sym(struct module *module, const char *name)
 /*
  * Reload a dso.
  */
-struct module *
-module_reload(const char *package, const char *package_end)
+int
+module_reload(const char *package, const char *package_end, struct module **module)
 {
 	struct module *old_module = module_cache_find(package, package_end);
 	if (old_module == NULL) {
 		/* Module wasn't loaded - do nothing. */
-		old_module = module_load(package, package_end);
-		if (old_module == NULL)
-			return NULL;
-		if (module_cache_put(package, package_end, old_module) != 0) {
-			module_delete(old_module);
-			return NULL;
-		}
+		*module = NULL;
+		return 0;
 	}
 
 	struct module *new_module = module_load(package, package_end);
 	if (new_module == NULL)
-		return NULL;
+		return -1;
 
 	struct func *func, *tmp_func;
 	rlist_foreach_entry_safe(func, &old_module->funcs, item, tmp_func) {
@@ -327,7 +322,8 @@ module_reload(const char *package, const char *package_end)
 		goto restore;
 	old_module->is_unloading = true;
 	module_gc(old_module);
-	return new_module;
+	*module = new_module;
+	return 0;
 restore:
 	/*
 	 * Some old-dso func can't be load from new module, restore old
@@ -349,7 +345,7 @@ restore:
 					   struct func, item));
 	assert(rlist_empty(&new_module->funcs));
 	module_delete(new_module);
-	return NULL;
+	return -1;
 }
 
 struct func *
@@ -434,8 +430,8 @@ func_reload(struct func *func)
 {
 	struct func_name name;
 	func_split_name(func->def->name, &name);
-	struct module *module = module_reload(name.package, name.package_end);
-	if (module == NULL) {
+	struct module *module = NULL;
+	if (module_reload(name.package, name.package_end, &module) != 0) {
 		diag_log();
 		return -1;
 	}

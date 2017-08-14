@@ -129,15 +129,16 @@ error:
 	return -1;
 }
 
-void
+int
 box_func_reload(const char *name)
 {
 	size_t name_len = strlen(name);
 	struct func *func = access_check_func(name, name_len);
 	if (func->def->language != FUNC_LANGUAGE_C || func->func == NULL)
-		return; /* Nothing to do */
-	if (func_reload(func) != 0)
-		diag_raise();
+		return 0; /* Nothing to do */
+	if (func_reload(func) == 0)
+		return 0;
+	return -1;
 }
 
 void

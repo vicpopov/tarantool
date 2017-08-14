@@ -43,3 +43,9 @@ foo(box_function_ctx_t *ctx, const char *args, const char *args_end)
 	}
 	return 0;
 }
+
+int
+test_reload(box_function_ctx_t *ctx, const char *args, const char *args_end)
+{
+	
+}
